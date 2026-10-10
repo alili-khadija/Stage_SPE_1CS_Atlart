@@ -1,0 +1,109 @@
+Flutter crash report.
+Please report a bug at https://github.com/flutter/flutter/issues.
+
+## command
+
+flutter run
+
+## exception
+
+StateError: Bad state: No element
+
+```
+#0      Stream.first.<anonymous closure> (dart:async/stream.dart:1653:32)
+<asynchronous suspension>
+#1      AnsiTerminal.promptForCharInput (package:flutter_tools/src/base/terminal.dart:410:17)
+<asynchronous suspension>
+#2      TargetDevices._readUserInput (package:flutter_tools/src/runner/target_devices.dart:373:27)
+<asynchronous suspension>
+#3      TargetDevices._chooseOneOfAvailableDevices (package:flutter_tools/src/runner/target_devices.dart:349:30)
+<asynchronous suspension>
+#4      TargetDevices._selectFromMultipleDevices (package:flutter_tools/src/runner/target_devices.dart:319:33)
+<asynchronous suspension>
+#5      RunCommand.validateCommand (package:flutter_tools/src/commands/run.dart:713:15)
+<asynchronous suspension>
+#6      FlutterCommand._updateCacheAndRunPubGet (package:flutter_tools/src/runner/flutter_command.dart:2015:5)
+<asynchronous suspension>
+#7      FlutterCommand.verifyThenRunCommand (package:flutter_tools/src/runner/flutter_command.dart:1977:17)
+<asynchronous suspension>
+#8      FlutterCommand.run.<anonymous closure> (package:flutter_tools/src/runner/flutter_command.dart:1663:27)
+<asynchronous suspension>
+#9      AppContext.run.<anonymous closure> (package:flutter_tools/src/base/context.dart:154:19)
+<asynchronous suspension>
+#10     CommandRunner.runCommand (package:args/command_runner.dart:212:13)
+<asynchronous suspension>
+#11     FlutterCommandRunner.runCommand.<anonymous closure> (package:flutter_tools/src/runner/flutter_command_runner.dart:496:9)
+<asynchronous suspension>
+#12     AppContext.run.<anonymous closure> (package:flutter_tools/src/base/context.dart:154:19)
+<asynchronous suspension>
+#13     FlutterCommandRunner.runCommand (package:flutter_tools/src/runner/flutter_command_runner.dart:431:5)
+<asynchronous suspension>
+#14     FlutterCommandRunner.run.<anonymous closure> (package:flutter_tools/src/runner/flutter_command_runner.dart:307:33)
+<asynchronous suspension>
+#15     run.<anonymous closure>.<anonymous closure> (package:flutter_tools/runner.dart:104:11)
+<asynchronous suspension>
+#16     AppContext.run.<anonymous closure> (package:flutter_tools/src/base/context.dart:154:19)
+<asynchronous suspension>
+#17     main (package:flutter_tools/executable.dart:103:3)
+<asynchronous suspension>
+```
+
+## flutter doctor
+
+```
+[32m[✓][39m Flutter (Channel stable, 3.47.0, on Microsoft Windows [Version
+    10.0.26200.9550], locale en-CA) [2.9s]
+    [32m•[39m Flutter version 3.47.0 on channel stable at
+      C:\Users\pc\dev\flutter
+    [32m•[39m Upstream repository https://github.com/flutter/flutter.git
+    [32m•[39m Framework revision 4cf2416426 (7 weeks ago), 2026-08-11 11:53:49
+      -0700
+    [32m•[39m Engine revision 5f77625673
+    [32m•[39m Dart version 3.13.0
+    [32m•[39m DevTools version 2.60.0
+    [32m•[39m Feature flags: enable-web, enable-linux-desktop,
+      enable-macos-desktop, enable-windows-desktop, enable-android,
+      enable-ios, cli-animations, enable-native-assets,
+      enable-record-use, enable-swift-package-manager,
+      omit-legacy-version-file, enable-lldb-debugging,
+      enable-uiscene-migration
+
+[32m[✓][39m Windows Version (Windows 11 or higher, 25H2, 2009) [31.2s]
+
+[32m[✓][39m Android toolchain - develop for Android devices (Android SDK
+    version 36.0.0) [10.5s]
+    [32m•[39m Android SDK at C:\Users\pc\AppData\Local\Android\sdk
+    [32m•[39m Emulator version 37.1.11.0 (build_id 15917651) (CL:N/A)
+    [32m•[39m Platform android-37.0, build-tools 36.0.0
+    [32m•[39m Java binary at: C:\Program Files\Android\Android
+      Studio\jbr\bin\java
+      This JDK is specified in your Flutter configuration.
+      To change the current JDK, run: `flutter config
+      --jdk-dir="path/to/jdk"`.
+    [32m•[39m Java version OpenJDK Runtime Environment (build
+      25.0.2+-15348964-b329.117)
+    [32m•[39m All Android licenses accepted.
+
+[32m[✓][39m Chrome - develop for the web [1,234ms]
+    [32m•[39m Chrome at C:\Program Files\Google\Chrome\Application\chrome.exe
+
+[32m[✓][39m Visual Studio - develop Windows apps (Visual Studio Build Tools
+    2019 16.11.51) [1,228ms]
+    [32m•[39m Visual Studio at C:\Program Files (x86)\Microsoft Visual
+      Studio\2019\BuildTools
+    [32m•[39m Visual Studio Build Tools 2019 version 16.11.36422.26
+    [32m•[39m Windows 10 SDK version 10.0.19041.0
+
+[32m[✓][39m Connected device (3 available) [1,504ms]
+    [32m•[39m Windows (desktop) • windows • windows-x64    • Microsoft Windows
+      [Version 10.0.26200.9550]
+    [32m•[39m Chrome (web)      • chrome  • web-javascript • Google Chrome
+      154.0.8037.58
+    [32m•[39m Edge (web)        • edge    • web-javascript • Microsoft Edge
+      154.0.4258.37
+
+[32m[✓][39m Network resources [2.6s]
+    [32m•[39m All expected network resources are available.
+
+[32m•[39m No issues found!
+```
