@@ -7,8 +7,15 @@ build/
 .flutter-plugins
 .flutter-plugins-dependencies
 
+# Logs et fichiers IDE
+*.log
+*.iml
+.idea/
+.vscode/
+
 # Android
 android/.gradle/
+android/.kotlin/
 android/local.properties
 android/key.properties
 *.jks
@@ -26,7 +33,5 @@ venv/
 # Secrets
 .env
 
-# IDE / OS
-.idea/
-.vscode/
+# OS
 .DS_Store
