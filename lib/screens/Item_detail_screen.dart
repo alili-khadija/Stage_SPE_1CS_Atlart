@@ -1,7 +1,10 @@
 // filepath: c:\src\atlart\lib\Screens\Item_detail_screen.dart
 import 'package:flutter/material.dart';
 
+import '../app_session.dart';
 import '../models/messaging.dart';
+import '../services/auth_api.dart';
+import '../services/favorite_api.dart';
 import '../theme/atlart_ui_theme.dart';
 import '../widgets/atlart_ui_widgets.dart';
 import 'new_message_screen.dart';
@@ -34,6 +37,7 @@ class AtlartItemDetail {
     this.rating = 0,
     this.imageAsset,
     this.offerable = true,
+    this.favoriteId,
   });
 
   final String title;
@@ -52,6 +56,7 @@ class AtlartItemDetail {
   final int rating;
   final String? imageAsset;
   final bool offerable;
+  final String? favoriteId;
 }
 
 class ItemDetailScreen extends StatefulWidget {
@@ -66,6 +71,60 @@ class ItemDetailScreen extends StatefulWidget {
 class _ItemDetailScreenState extends State<ItemDetailScreen> {
   bool _following = false;
   bool _storyExpanded = false;
+  bool _isFavorite = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFavoriteState();
+  }
+
+  Future<void> _loadFavoriteState() async {
+    final id = widget.item.favoriteId;
+    final token = AtlartSession.instance.token;
+    if (id == null || token == null || !AuthApi.useBackend) return;
+    try {
+      final favorites = await FavoriteApi.list(token);
+      if (!mounted) return;
+      setState(() => _isFavorite = favorites.any(
+        (row) => row['entite_type'] == 'OEUVRE' && row['entite_id'] == id,
+      ));
+    } on FavoriteApiException catch (error) {
+      debugPrint('Could not load item favorite state: $error');
+    }
+  }
+
+  Future<void> _toggleFavorite() async {
+    final id = widget.item.favoriteId;
+    final token = AtlartSession.instance.token;
+    if (id == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Cette œuvre de démonstration n’est pas reliée au catalogue.'),
+        ),
+      );
+      return;
+    }
+    if (token == null || !AuthApi.useBackend) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Connectez-vous pour enregistrer ce favori.')),
+      );
+      return;
+    }
+    try {
+      if (_isFavorite) {
+        await FavoriteApi.remove(token, 'OEUVRE', id);
+      } else {
+        await FavoriteApi.add(token, 'OEUVRE', id);
+      }
+      if (mounted) setState(() => _isFavorite = !_isFavorite);
+    } on FavoriteApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message)),
+      );
+    }
+  }
 
   static const _heroHeight = 300.0;
 
@@ -126,7 +185,12 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
         children: [
           Column(
             children: [
-              _Hero(item: item, height: _heroHeight),
+              _Hero(
+                item: item,
+                height: _heroHeight,
+                isFavorite: _isFavorite,
+                onFavorite: _toggleFavorite,
+              ),
               Expanded(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(20, 18, 20, 110),
@@ -260,10 +324,17 @@ class _ItemDetailScreenState extends State<ItemDetailScreen> {
 }
 
 class _Hero extends StatelessWidget {
-  const _Hero({required this.item, required this.height});
+  const _Hero({
+    required this.item,
+    required this.height,
+    required this.isFavorite,
+    required this.onFavorite,
+  });
 
   final AtlartItemDetail item;
   final double height;
+  final bool isFavorite;
+  final VoidCallback onFavorite;
 
   @override
   Widget build(BuildContext context) {
@@ -297,7 +368,32 @@ class _Hero extends StatelessWidget {
           Positioned(
             top: topInset + 8,
             right: 16,
-            child: const _MoreMenuButton(),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Material(
+                    color: Colors.white,
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: onFavorite,
+                      child: SizedBox(
+                        width: 42,
+                        height: 42,
+                        child: Icon(
+                          isFavorite
+                              ? Icons.favorite_rounded
+                              : Icons.favorite_border_rounded,
+                          color: AtlartPalette.coral,
+                          size: 21,
+                        ),
+                      ),
+                    ),
+                  ),
+                const SizedBox(width: 8),
+                const _MoreMenuButton(),
+              ],
+            ),
           ),
           Positioned(
             left: 16,

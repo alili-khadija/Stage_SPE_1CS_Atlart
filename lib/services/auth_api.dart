@@ -41,13 +41,15 @@ class AuthResult {
 class AuthApi {
   AuthApi._();
 
-  // Laravel auth is intentionally opt-in while the backend is unavailable.
-  // Enable it later with --dart-define=ATLART_USE_BACKEND=true.
+  // Backend ON par défaut. Pour revenir au mode hors-ligne (faux compte local) :
+  // flutter run --dart-define=ATLART_USE_BACKEND=false
   static const useBackend = bool.fromEnvironment(
     'ATLART_USE_BACKEND',
-    defaultValue: false,
+    defaultValue: true,
   );
 
+  // Émulateur Android : 10.0.2.2 = ton PC.
+  // Vrai téléphone : flutter run --dart-define=API_URL=http://192.168.1.X:8000/api
   static const baseUrl = String.fromEnvironment(
     'API_URL',
     defaultValue: 'http://10.0.2.2:8000/api',
@@ -60,6 +62,8 @@ class AuthApi {
   ) async {
     final json = await _send('POST', '/auth/login', body: {
       'identifiant': identifiant,
+      // Envoyé aussi sous "email" au cas où le backend valide ce champ.
+      if (identifiant.contains('@')) 'email': identifiant,
       'mot_de_passe': motDePasse,
       'device_name': 'atlart-mobile',
     });
@@ -73,6 +77,7 @@ class AuthApi {
     required String paysCode,
     String? localisation,
     required String roleSouhaite,
+    int? localiteId,
   }) async {
     final json = await _send('POST', '/auth/register', body: {
       'nom_emprunt': nomEmprunt,
@@ -82,6 +87,7 @@ class AuthApi {
       'localisation':
           localisation == null || localisation.isEmpty ? null : localisation,
       'role_souhaite': roleSouhaite,
+      'localite_id': localiteId,
       'device_name': 'atlart-mobile',
     });
     return _result(json);
@@ -89,7 +95,8 @@ class AuthApi {
 
   static Future<AtlartUser> me(String token) async {
     final json = await _send('GET', '/auth/me', token: token);
-    final user = json['utilisateur'];
+    // Laravel renvoie l'utilisateur directement ; on accepte aussi { utilisateur: {...} }.
+    final user = json['utilisateur'] ?? json;
     if (user is! Map<String, dynamic>) {
       throw const AuthException(
         AuthErrorKind.server,
@@ -118,8 +125,13 @@ class AuthApi {
   }
 
   static AtlartUser _parseUser(Map<String, dynamic> json) {
+    // Laravel nomme la clé primaire "id_utilisateur" : on ajoute l'alias "id".
+    final normalized = Map<String, dynamic>.from(json);
+    if (normalized['id'] == null && normalized['id_utilisateur'] != null) {
+      normalized['id'] = normalized['id_utilisateur'];
+    }
     try {
-      return AtlartUser.fromJson(json);
+      return AtlartUser.fromJson(normalized);
     } on FormatException {
       throw const AuthException(
         AuthErrorKind.server,

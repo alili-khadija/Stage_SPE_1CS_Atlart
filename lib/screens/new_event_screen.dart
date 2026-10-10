@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
+import '../services/event_api.dart';
 import '../theme/atlart_ui_theme.dart';
 import '../widgets/atlart_ui_widgets.dart';
 import 'event_draft.dart';
@@ -67,6 +69,19 @@ class _NewEventScreenState extends State<NewEventScreen> {
     if (item != null) setState(() => _draft.schedule.add(item));
   }
 
+  Future<void> _pickCover() async {
+    final file = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+    );
+    if (file != null && mounted) setState(() => _draft.imagePath = file.path);
+  }
+
+  String _date(DateTime? value) {
+    if (value == null) return '';
+    return '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
+  }
+
   String? _validate() {
     if (_titleCtrl.text.trim().isEmpty) return 'Donnez un titre à votre événement.';
     if (_draft.startDate == null) {
@@ -96,14 +111,50 @@ class _NewEventScreenState extends State<NewEventScreen> {
       ..location = _locationCtrl.text.trim()
       ..description = _descriptionCtrl.text.trim();
 
-    // TODO: remplacer par le vrai appel API de création d'événement.
-    await Future<void>.delayed(const Duration(milliseconds: 500));
-    if (!mounted) return;
-    setState(() => _submitting = false);
-
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => EventSubmittedScreen(draft: _draft)),
-    );
+    try {
+      final id = await EventApi.create(
+        event: {
+          'titre': _draft.title,
+          'type': switch (_draft.type) {
+            EventType.exposition => 'EXPOSITION',
+            EventType.atelier => 'ATELIER',
+            EventType.residence => 'RESIDENCE',
+          },
+          'date_debut': _date(_draft.startDate),
+          'date_fin': _draft.endDate == null ? null : _date(_draft.endDate),
+          'horaire': _draft.timeRange,
+          'lieu_texte': _draft.location,
+          'description': _draft.description,
+          'mode': _draft.mode == EventMode.presentiel ? 'PRESENTIEL' : 'VIRTUEL',
+          'lien_partage': _draft.mode == EventMode.virtuel ? _draft.location : null,
+          'capacite': _draft.capacity,
+          'programme': _draft.schedule
+              .map((item) => {
+                    'jour_label': item.code,
+                    'titre': item.title,
+                    'sous_titre': item.subtitle,
+                  })
+              .toList(),
+        },
+        coverPath: _draft.imagePath,
+      );
+      if (!mounted) return;
+      if (id.isNotEmpty) _draft.id = id;
+      setState(() => _submitting = false);
+      final submittedDraft = await Navigator.of(context).push<EventDraft>(
+        MaterialPageRoute<EventDraft>(
+          builder: (_) => EventSubmittedScreen(draft: _draft),
+        ),
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(submittedDraft ?? _draft);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+    }
   }
 
   @override
@@ -125,9 +176,7 @@ class _NewEventScreenState extends State<NewEventScreen> {
                     const SizedBox(height: 12),
                     CoverUploadBox(
                       imagePath: _draft.imagePath,
-                      onTap: () {
-                        // TODO: brancher image_picker, comme dans add_article_screen.dart.
-                      },
+                      onTap: _pickCover,
                     ),
                     const SizedBox(height: 14),
                     EventTypeTabs(value: type, onChanged: _changeType),

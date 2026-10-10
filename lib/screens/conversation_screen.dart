@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../app_session.dart';
 import '../models/messaging.dart';
+import '../services/auth_api.dart';
+import '../services/safety_api.dart';
 import '../theme/atlart_ui_theme.dart' show AtlartAssets;
 import '../widgets/messaging_ui.dart';
 import '../widgets/offers_ui.dart' show OfferColors, OfferText;
@@ -30,6 +33,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
     super.initState();
     _store.markRead(widget.threadId);
     _store.addListener(_onStoreChanged);
+    _store.refreshThread(widget.threadId).catchError((Object error) {
+      debugPrint('Unable to load conversation messages: $error');
+    });
   }
 
   @override
@@ -88,25 +94,96 @@ class _ConversationScreenState extends State<ConversationScreen> {
               leading: const Icon(Icons.flag_outlined),
               title: const Text('Signaler la conversation'),
               subtitle: const Text('Un modérateur Atlart examinera l’échange.'),
-              onTap: () {
+              onTap: () async {
                 Navigator.of(sheetContext).pop();
-                // TODO : POST /conversations/{id}/report
-                _toast('Merci, votre signalement a été transmis.');
+                await _reportConversation(thread);
               },
             ),
             ListTile(
               leading: const Icon(Icons.block_rounded),
               title: Text('Bloquer ${thread.participant.name}'),
-              onTap: () {
+              onTap: () async {
                 Navigator.of(sheetContext).pop();
-                // TODO : brancher sur « Comptes bloqués ».
-                _toast('${thread.participant.name} a été bloqué(e).');
+                await _blockParticipant(thread);
               },
             ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _reportConversation(ChatThread thread) async {
+    const reasons = [
+      'Harcèlement ou intimidation',
+      'Spam ou sollicitation',
+      'Contenu inapproprié',
+      'Fraude ou comportement suspect',
+      'Autre',
+    ];
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('Pourquoi signalez-vous cette conversation ?'),
+        children: [
+          for (final item in reasons)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(dialogContext).pop(item),
+              child: Text(item),
+            ),
+        ],
+      ),
+    );
+    if (reason == null || !mounted) return;
+    final token = AtlartSession.instance.token;
+    if (!AuthApi.useBackend || token == null) {
+      _toast('Connectez-vous avec le backend pour envoyer un signalement.');
+      return;
+    }
+    try {
+      await SafetyApi.reportConversation(
+        token: token,
+        conversationId: thread.id,
+        reason: reason,
+      );
+      if (mounted) _toast('Merci, votre signalement a été transmis.');
+    } catch (error) {
+      if (mounted) _toast('Signalement impossible : $error');
+    }
+  }
+
+  Future<void> _blockParticipant(ChatThread thread) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Bloquer cet utilisateur ?'),
+        content: Text(
+          '${thread.participant.name} ne pourra plus vous envoyer de messages.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Bloquer'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final token = AtlartSession.instance.token;
+    if (!AuthApi.useBackend || token == null) {
+      _toast('Connectez-vous avec le backend pour bloquer cet utilisateur.');
+      return;
+    }
+    try {
+      await SafetyApi.blockUser(token: token, userId: thread.participant.id);
+      if (mounted) Navigator.of(context).maybePop();
+    } catch (error) {
+      if (mounted) _toast('Blocage impossible : $error');
+    }
   }
 
   @override

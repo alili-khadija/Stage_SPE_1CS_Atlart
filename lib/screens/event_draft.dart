@@ -51,6 +51,11 @@ class EventParticipant {
     required this.name,
     required this.requestedOn,
     required this.avatarColor,
+    this.registrationId,
+    this.email = '',
+    this.phone = '',
+    this.message = '',
+    this.placesRequested = 1,
     this.status = RegistrationStatus.pending,
     this.checkedInAt,
     this.checkedInManually = false,
@@ -59,6 +64,11 @@ class EventParticipant {
   final String name;
   final String requestedOn;
   final Color avatarColor;
+  final String? registrationId;
+  final String email;
+  final String phone;
+  final String message;
+  final int placesRequested;
   RegistrationStatus status;
   String? checkedInAt;
   bool checkedInManually;
@@ -81,7 +91,7 @@ class EventDraft {
   }) : id = id ?? DateTime.now().microsecondsSinceEpoch.toString(),
        schedule = schedule ?? [];
 
-  final String id;
+  String id;
   EventType type;
   String title;
   DateTime? startDate;

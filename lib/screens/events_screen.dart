@@ -145,6 +145,7 @@ class _EventsScreenState extends State<EventsScreen> {
       MaterialPageRoute<void>(
         builder: (_) => ParticipantsScreen(
           eventTitle: event.draft.title,
+          eventId: event.draft.id,
           initialParticipants: event.participants,
         ),
       ),

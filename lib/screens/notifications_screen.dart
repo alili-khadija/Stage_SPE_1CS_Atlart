@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../app_session.dart';
+import '../services/auth_api.dart';
+import '../services/notification_api.dart';
 import '../widgets/atlart_search_widgets.dart' show AtlartBottomNav;
 
 class AppNotification {
   AppNotification({
+    required this.id,
+    required this.type,
     required this.icon,
     required this.iconColor,
     required this.iconBackground,
@@ -13,6 +18,8 @@ class AppNotification {
     this.isNew = false,
   });
 
+  final String id;
+  final String type;
   final IconData icon;
   final Color iconColor;
   final Color iconBackground;
@@ -37,60 +44,126 @@ class _NotificationsPageState extends State<NotificationsPage> {
   static const _orangeBackground = Color(0xFFFDE8D3);
   static const _ink = Color(0xFF1F2F46);
 
-  late final List<AppNotification> _items = [
-    AppNotification(
-      icon: Icons.chat_bubble_outline,
-      iconColor: _green,
-      iconBackground: _greenBackground,
-      title: 'Yasmine Bouazizi vous a envoyé un message',
-      time: 'Il y a 12 min',
-      isNew: true,
-    ),
-    AppNotification(
-      icon: Icons.add,
-      iconColor: _orange,
-      iconBackground: _orangeBackground,
-      title: 'Votre offre sur Médina, fragments a été acceptée',
-      time: 'Il y a 1 h',
-      isNew: true,
-    ),
-    AppNotification(
-      icon: Icons.access_time,
-      iconColor: _orange,
-      iconBackground: _orangeBackground,
-      title: 'Votre réservation expire dans 2 h',
-      time: 'Il y a 3 h',
-      isNew: true,
-    ),
-    AppNotification(
-      icon: Icons.person_add_alt,
-      iconColor: _green,
-      iconBackground: _greenBackground,
-      title: 'Karim T. a commencé à vous suivre',
-      time: 'Lundi',
-    ),
-    AppNotification(
-      icon: Icons.check,
-      iconColor: Colors.white,
-      iconBackground: _ink,
-      title: 'Votre candidature artiste a été acceptée 🎉',
-      time: 'Lundi',
-    ),
-    AppNotification(
-      icon: Icons.event_outlined,
-      iconColor: _orange,
-      iconBackground: _orangeBackground,
-      title: "Un abonné s'est inscrit à votre événement",
-      time: 'Dimanche',
-    ),
-    AppNotification(
-      icon: Icons.star_border,
-      iconColor: _green,
-      iconBackground: _greenBackground,
-      title: 'Nouvel avis 5★ sur Tapis du Moyen Atlas',
-      time: 'Samedi',
-    ),
-  ];
+  final List<AppNotification> _items = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNotifications();
+  }
+
+  Future<void> _loadNotifications() async {
+    final token = AtlartSession.instance.token;
+    if (!AuthApi.useBackend || token == null) {
+      setState(() {
+        _items.clear();
+        _loading = false;
+      });
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final rows = await NotificationApi.list(token);
+      if (!mounted) return;
+      setState(() {
+        _items
+          ..clear()
+          ..addAll(rows.map(_fromJson));
+        _loading = false;
+      });
+    } on NotificationApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.message;
+        _loading = false;
+      });
+    }
+  }
+
+  AppNotification _fromJson(Map<String, dynamic> row) {
+    final type = '${row['type'] ?? ''}';
+    final style = switch (type) {
+      'NOUVEAU_MESSAGE' => (Icons.chat_bubble_outline, _green, _greenBackground),
+      'NOUVEL_ABONNE' => (Icons.person_add_alt, _green, _greenBackground),
+      'ABONNE_INSCRIT_EVENEMENT' || 'NOUVELLE_PUBLICATION' =>
+        (Icons.event_outlined, _orange, _orangeBackground),
+      'EVENEMENT_MODERE' => (Icons.event_available_outlined, _green, _greenBackground),
+      'INSCRIPTION_EVENEMENT_VALIDEE' =>
+        (Icons.event_available_outlined, _green, _greenBackground),
+      'INSCRIPTION_EVENEMENT_REFUSEE' =>
+        (Icons.event_busy, _orange, _orangeBackground),
+      'COMMANDE_ACCEPTEE' =>
+        (Icons.shopping_bag_outlined, _green, _greenBackground),
+      'COMMANDE_REFUSEE' =>
+        (Icons.shopping_bag_outlined, _orange, _orangeBackground),
+      'NOUVELLE_OFFRE' || 'OFFRE_ACCEPTEE' || 'OFFRE_REFUSEE' || 'CONTRE_PROPOSITION' =>
+        (Icons.local_offer_outlined, _orange, _orangeBackground),
+      _ => (Icons.check, Colors.white, _ink),
+    };
+    final date = DateTime.tryParse('${row['date'] ?? ''}')?.toLocal();
+    final title = row['message'] ?? row['titre'] ?? row['contenu'] ?? _titleFor(type);
+    final lu = row['lu'];
+    return AppNotification(
+      id: '${row['id'] ?? ''}',
+      type: type,
+      icon: style.$1,
+      iconColor: style.$2,
+      iconBackground: style.$3,
+      title: '$title',
+      time: date == null ? '' : _relativeTime(date),
+      isNew: lu != true && lu != 1 && lu != '1',
+    );
+  }
+
+  String _titleFor(String type) => switch (type) {
+        'NOUVEAU_MESSAGE' => 'Vous avez reçu un nouveau message.',
+        'NOUVEL_ABONNE' => 'Une personne a commencé à vous suivre.',
+        'NOUVELLE_PUBLICATION' => 'Une nouvelle publication est disponible.',
+        'CANDIDATURE_TRAITEE' => 'Votre candidature a été traitée.',
+        'OEUVRE_MODEREE' => 'Le statut de votre œuvre a été mis à jour.',
+        'EVENEMENT_MODERE' => 'Le statut de votre événement a été mis à jour.',
+        'INSCRIPTION_EVENEMENT_VALIDEE' => 'Votre inscription à un événement a été acceptée.',
+        'INSCRIPTION_EVENEMENT_REFUSEE' => 'Votre inscription à un événement a été refusée.',
+        'COMMANDE_ACCEPTEE' => 'Votre commande a été acceptée par l’artisan.',
+        'COMMANDE_REFUSEE' => 'Votre commande a été refusée par l’artisan.',
+        'ABONNE_INSCRIT_EVENEMENT' => 'Une personne s’est inscrite à votre événement.',
+        'NOUVELLE_OFFRE' => 'Vous avez reçu une nouvelle offre.',
+        'OFFRE_ACCEPTEE' => 'Votre offre a été acceptée.',
+        'OFFRE_REFUSEE' => 'Votre offre a été refusée.',
+        'CONTRE_PROPOSITION' => 'Vous avez reçu une contre-proposition.',
+        _ => 'Vous avez une nouvelle notification.',
+      };
+
+  String _relativeTime(DateTime date) {
+    final age = DateTime.now().difference(date);
+    if (age.inMinutes < 1) return 'À l’instant';
+    if (age.inMinutes < 60) return 'Il y a ${age.inMinutes} min';
+    if (age.inHours < 24) return 'Il y a ${age.inHours} h';
+    if (age.inDays == 1) return 'Hier';
+    if (age.inDays < 7) return 'Il y a ${age.inDays} jours';
+    return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+  }
+
+  Future<void> _markAsRead(AppNotification item) async {
+    if (!item.isNew) return;
+    setState(() => item.isNew = false);
+    final token = AtlartSession.instance.token;
+    if (!AuthApi.useBackend || token == null || item.id.isEmpty) return;
+    try {
+      await NotificationApi.markAsRead(token, item.id);
+    } on NotificationApiException catch (error) {
+      if (!mounted) return;
+      setState(() => item.isNew = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message)),
+      );
+    }
+  }
 
   void _handleTabSelected(int index) {
     if (widget.onTabSelected != null) {
@@ -143,6 +216,29 @@ class _NotificationsPageState extends State<NotificationsPage> {
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                   children: [
+                    if (_loading)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 48),
+                        child: Center(child: CircularProgressIndicator()),
+                      ),
+                    if (!_loading && _error != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 40),
+                        child: Column(
+                          children: [
+                            Text(_error!, textAlign: TextAlign.center),
+                            TextButton(
+                              onPressed: _loadNotifications,
+                              child: const Text('Réessayer'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (!_loading && _error == null && _items.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 56),
+                        child: Center(child: Text('Aucune notification pour le moment.')),
+                      ),
                     if (newItems.isNotEmpty) ...[
                       const _NotificationsSectionTitle('Nouvelles'),
                       for (final item in newItems) _notificationTile(item),
@@ -166,11 +262,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
       padding: const EdgeInsets.only(bottom: 10),
       child: _NotificationTile(
         item: item,
-        onTap: () {
-          if (item.isNew) {
-            setState(() => item.isNew = false);
-          }
-        },
+        onTap: () => _markAsRead(item),
       ),
     );
   }

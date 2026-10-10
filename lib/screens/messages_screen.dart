@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/messaging.dart';
 import '../theme/atlart_ui_theme.dart' show AtlartAssets;
@@ -21,6 +22,14 @@ class _MessagesScreenState extends State<MessagesScreen> {
   final _store = MessageStore.instance;
   final _search = TextEditingController();
   _Filter _filter = _Filter.all;
+
+  @override
+  void initState() {
+    super.initState();
+    _store.loadRemote().catchError((Object error) {
+      debugPrint('Unable to load conversations: $error');
+    });
+  }
 
   @override
   void dispose() {

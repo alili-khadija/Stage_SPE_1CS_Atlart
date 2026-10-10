@@ -3,8 +3,7 @@ import 'package:flutter/material.dart';
 import '../theme/atlart_ui_theme.dart';
 import 'event_draft.dart';
 import 'event_form_widgets.dart' show EventPageBackground;
-// import 'event_detail_screen.dart'; // pour "Voir l'événement"
-// import 'my_events_screen.dart'; // pour "Retour à mes événements"
+import 'event_detail_page.dart';
 
 /// Écran affiché juste après "Soumettre l'événement" : l'événement part
 /// en modération, l'organisateur peut déjà consulter sa fiche ou
@@ -17,7 +16,7 @@ class EventSubmittedScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: false,
+      canPop: true,
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: EventPageBackground(
@@ -71,11 +70,13 @@ class EventSubmittedScreen extends StatelessWidget {
                       elevation: 0,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                     ),
-                    onPressed: () {
-                      // TODO: Navigator.of(context).pushReplacement(
-                      //   MaterialPageRoute(builder: (_) => EventDetailScreen(draft: draft)),
-                      // );
-                    },
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => EventDetailPage(
+                          event: draft.toEventDetail(),
+                        ),
+                      ),
+                    ),
                     child: const Text('Voir l\'événement', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, fontFamily: 'Poppins')),
                   ),
                 ),
@@ -88,7 +89,7 @@ class EventSubmittedScreen extends StatelessWidget {
                       side: const BorderSide(color: AtlartPalette.navyDark),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                     ),
-                    onPressed: () => Navigator.of(context).popUntil((r) => r.isFirst),
+                    onPressed: () => Navigator.of(context).pop(draft),
                     child: const Text(
                       'Retour à mes événements',
                       style: TextStyle(color: AtlartPalette.navyDark, fontSize: 13, fontWeight: FontWeight.w600, fontFamily: 'Poppins'),

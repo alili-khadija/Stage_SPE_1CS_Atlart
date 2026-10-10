@@ -3,6 +3,10 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart' show Color;
 
+import '../app_session.dart';
+import '../services/auth_api.dart';
+import '../services/reservation_api.dart';
+
 String formatMoney(int amount, String currency) {
   final digits = amount.toString();
   final formatted = StringBuffer();
@@ -20,6 +24,7 @@ class Product {
     required this.price,
     required this.artisanName,
     required this.artisanLocation,
+    this.backendId,
     this.currency = 'DZD',
     this.category = 'Artisanat',
     this.description = '',
@@ -36,6 +41,7 @@ class Product {
   });
 
   final String id;
+  final String? backendId;
   final String title;
   final int price;
   final String currency;
@@ -195,7 +201,51 @@ class OrderStore extends ChangeNotifier {
       throw StateError('Renseignez un numéro de téléphone.');
     }
 
-    // Replace with POST /orders { product, quantity, mode, contact }.
+    if (AuthApi.useBackend) {
+      final token = AtlartSession.instance.token;
+      final backendId = product.backendId;
+      if (token == null) {
+        throw StateError('Connectez-vous pour passer une commande.');
+      }
+      if (backendId == null || backendId.isEmpty) {
+        throw StateError(
+          'Cet article de démonstration n’est pas relié au catalogue backend.',
+        );
+      }
+      final reservation = await ReservationApi.create(
+        token: token,
+        oeuvreId: backendId,
+        quantity: quantity,
+        fulfillment: mode == FulfillmentMode.pickup
+            ? 'RETRAIT_ATELIER'
+            : 'LIVRAISON',
+        phone: contact.phone,
+        address: contact.address,
+        city: contact.city,
+        note: contact.note,
+      );
+      final reservationId = '${reservation['id'] ?? ''}';
+      if (reservationId.isEmpty) {
+        throw const ReservationApiException(
+          'Le serveur n’a pas retourné l’identifiant de la réservation.',
+        );
+      }
+      final order = Order(
+        id: reservationId,
+        product: product,
+        quantity: int.tryParse('${reservation['quantite']}') ?? quantity,
+        mode: mode,
+        contact: contact,
+        placedAt: DateTime.tryParse('${reservation['date_reservation']}') ??
+            DateTime.now(),
+        status: OrderStatus.pending,
+      );
+      _orders.insert(0, order);
+      notifyListeners();
+      return order;
+    }
+
+    // Mode démo hors ligne : conserve une commande locale temporaire.
     await Future<void>.delayed(const Duration(milliseconds: 700));
     if (quantity > stockLeft(product)) {
       throw StateError('Le stock disponible a changé. Vérifiez la quantité.');
@@ -218,7 +268,17 @@ class OrderStore extends ChangeNotifier {
   Future<void> cancel(String orderId) async {
     final index = _orders.indexWhere((order) => order.id == orderId);
     if (index < 0 || _orders[index].status != OrderStatus.pending) return;
-    // Replace with POST /orders/{id}/cancel.
+    if (AuthApi.useBackend) {
+      final token = AtlartSession.instance.token;
+      if (token == null) {
+        throw StateError('Connectez-vous pour annuler cette réservation.');
+      }
+      await ReservationApi.updateStatus(
+        token: token,
+        reservationId: orderId,
+        status: 'ANNULEE',
+      );
+    }
     _orders[index] = _orders[index].copyWith(status: OrderStatus.cancelled);
     notifyListeners();
   }

@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../Screens/artisan_profile_screen.dart';
-import '../Screens/my_offers_screen.dart';
-import '../Screens/search_screen.dart';
+import '../screens/artisan_profile_screen.dart';
+import '../screens/my_offers_screen.dart';
+import '../screens/search_screen.dart';
 
 void navigateToTab(BuildContext context, int index) {
   final Widget page;

@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 
 import 'event_detail.dart';
+import '../services/auth_api.dart';
+import '../services/event_api.dart';
 
 enum EventRegistrationStatus { pending, validated, declined }
 
@@ -66,10 +68,7 @@ class EventRegistrationStore extends ChangeNotifier {
 
   bool isRegistered(String eventId) => _items.containsKey(eventId);
 
-  /// Stores an event registration and the participant's submitted details.
-  ///
-  /// Replace the local delay with POST /events/{id}/registrations and send
-  /// [form] fields (name, e-mail, phone, city, participant count, and message).
+  /// Stores the registration in Laravel when backend mode is enabled.
   Future<EventRegistration> register(
     EventDetail event, {
     EventRegistrationForm? form,
@@ -85,16 +84,39 @@ class EventRegistrationStore extends ChangeNotifier {
       throw StateError('Cet événement est complet.');
     }
 
-    // Remplacer cette attente par POST /events/{id}/registrations.
-    await Future<void>.delayed(const Duration(milliseconds: 600));
+    Map<String, dynamic> response = {};
+    if (AuthApi.useBackend) {
+      if (form == null) {
+        throw StateError('Les coordonnées d’inscription sont manquantes.');
+      }
+      response = await EventApi.register(
+        eventId: event.id,
+        details: {
+          'nom_complet': form.fullName,
+          'email': form.email,
+          'telephone': form.phone,
+          'ville': form.city,
+          'nombre_participants': form.participants,
+          'message': form.message,
+        },
+      );
+    } else {
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+    }
 
     final registration = EventRegistration(
       event: event,
-      requestedAt: DateTime.now(),
+      requestedAt:
+          DateTime.tryParse('${response['date_demande'] ?? ''}') ??
+          DateTime.now(),
       form: form,
-      status: event.requiresValidation
-          ? EventRegistrationStatus.pending
-          : EventRegistrationStatus.validated,
+      status: switch ('${response['statut'] ?? ''}') {
+        'VALIDE' => EventRegistrationStatus.validated,
+        'REJETE' => EventRegistrationStatus.declined,
+        _ => event.requiresValidation
+            ? EventRegistrationStatus.pending
+            : EventRegistrationStatus.validated,
+      },
     );
     _items[event.id] = registration;
     notifyListeners();

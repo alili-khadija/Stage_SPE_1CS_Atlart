@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 
+import '../app_session.dart';
+import '../services/auth_api.dart';
+import '../services/favorite_api.dart';
 import '../widgets/atlart_search_widgets.dart';
 import 'search_screen.dart';
 
 class FavoriteArtwork {
   const FavoriteArtwork({
+    required this.id,
+    required this.type,
     required this.title,
     required this.subtitle,
     required this.price,
@@ -12,47 +17,14 @@ class FavoriteArtwork {
     this.imageUrl,
   });
 
+  final String id;
+  final String type;
   final String title;
   final String subtitle;
   final String price;
   final Color placeholder;
   final String? imageUrl;
 }
-
-final List<FavoriteArtwork> _favoriteArtworks = [
-  const FavoriteArtwork(
-    title: 'Médina, fragments',
-    subtitle: 'Yasmine Bouazizi · Tunis',
-    price: '1 800 MAD',
-  ),
-  const FavoriteArtwork(
-    title: 'Zellige bleu',
-    subtitle: 'Atelier Zerhouni · Fès',
-    price: '650 MAD',
-    placeholder: Color(0xFFFF7373),
-  ),
-  const FavoriteArtwork(
-    title: 'Tapis du Moyen Atlas',
-    subtitle: 'Atelier Zerhouni · Tlemcen',
-    price: '1 800 MAD',
-  ),
-  const FavoriteArtwork(
-    title: 'Poterie berbère',
-    subtitle: 'Chaïbia Talal · Rabat',
-    price: '420 MAD',
-    placeholder: Color(0xFFF4A261),
-  ),
-  const FavoriteArtwork(
-    title: 'Lanterne en cuivre',
-    subtitle: 'Atelier Zerhouni · Fès',
-    price: '380 MAD',
-  ),
-  const FavoriteArtwork(
-    title: 'Broderie de Nabeul',
-    subtitle: 'Yasmine Bouazizi · Tunis',
-    price: '540 MAD',
-  ),
-];
 
 class FavoritesScreen extends StatefulWidget {
   const FavoritesScreen({super.key});
@@ -63,6 +35,132 @@ class FavoritesScreen extends StatefulWidget {
 
 class _FavoritesScreenState extends State<FavoritesScreen> {
   static const _tabs = ['Œuvres', 'Artistes', 'Ateliers', 'Évènements'];
+  static const _types = ['OEUVRE', 'UTILISATEUR', 'ATELIER', 'EVENEMENT'];
+  final List<FavoriteArtwork> _items = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFavorites();
+  }
+
+  Future<void> _loadFavorites() async {
+    final token = AtlartSession.instance.token;
+    if (!AuthApi.useBackend || token == null) {
+      setState(() {
+        _items.clear();
+        _loading = false;
+      });
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final rows = await FavoriteApi.list(token);
+      if (!mounted) return;
+      setState(() {
+        _items
+          ..clear()
+          ..addAll(rows.map(_fromJson));
+        _loading = false;
+      });
+    } on FavoriteApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.message;
+        _loading = false;
+      });
+    }
+  }
+
+  FavoriteArtwork _fromJson(Map<String, dynamic> row) {
+    final entity = row['entite'] is Map
+        ? Map<String, dynamic>.from(row['entite'] as Map)
+        : const <String, dynamic>{};
+    final type = '${row['entite_type'] ?? ''}';
+    final price = entity['prix'];
+    final currency = entity['devise'] ?? '';
+    String firstText(List<String> keys, [String fallback = '']) {
+      for (final key in keys) {
+        final value = entity[key];
+        if (value != null && value.toString().trim().isNotEmpty) {
+          return value.toString();
+        }
+      }
+      return fallback;
+    }
+    final placeholder = switch (type) {
+      'UTILISATEUR' => const Color(0xFFD9E8F8),
+      'ATELIER' => const Color(0xFFFFDDB8),
+      'EVENEMENT' => const Color(0xFFE7DDF5),
+      _ => const Color(0xFF2A9D8F),
+    };
+    final imageUrl = firstText(['image_url', 'photo_url', 'avatar_url', 'image']);
+    return FavoriteArtwork(
+      id: '${row['entite_id'] ?? ''}',
+      type: type,
+      title: firstText(
+        ['titre', 'title', 'name', 'nom_emprunt', 'nom_complet', 'nom'],
+        'Élément indisponible',
+      ),
+      subtitle: firstText(
+        ['sous_titre', 'subtitle', 'specialite', 'role', 'ville'],
+      ),
+      price: price == null ? '' : '$price $currency'.trim(),
+      imageUrl: imageUrl.isEmpty ? null : imageUrl,
+      placeholder: placeholder,
+    );
+  }
+
+  Future<void> _removeFavorite(FavoriteArtwork item) async {
+    final index = _items.indexOf(item);
+    setState(() => _items.remove(item));
+    final token = AtlartSession.instance.token;
+    if (!AuthApi.useBackend || token == null) return;
+    try {
+      await FavoriteApi.remove(token, item.type, item.id);
+    } on FavoriteApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _items.insert(index.clamp(0, _items.length).toInt(), item));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message)),
+      );
+    }
+  }
+
+  Widget _favoritesTab(int index) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_error != null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(_error!, textAlign: TextAlign.center),
+            TextButton(onPressed: _loadFavorites, child: const Text('Réessayer')),
+          ],
+        ),
+      );
+    }
+    final items = _items.where((item) => item.type == _types[index]).toList();
+    if (items.isNotEmpty) {
+      return _ArtworkGrid(items: items, onRemove: _removeFavorite);
+    }
+    return _EmptyFavorites(
+      title: [
+        "Aucune œuvre favorite pour l'instant",
+        "Aucun artiste favori pour l'instant",
+        "Aucun atelier favori pour l'instant",
+        "Aucun évènement favori pour l'instant",
+      ][index],
+      message: 'Les éléments que vous ajoutez à vos favoris apparaîtront ici.',
+      buttonLabel: 'Découvrir',
+      onPressed: _openDiscover,
+    );
+  }
 
   void _openDiscover() {
     Navigator.of(context)
@@ -131,41 +229,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
               ),
               Expanded(
                 child: TabBarView(
-                  children: [
-                    _favoriteArtworks.isEmpty
-                        ? _EmptyFavorites(
-                            title: "Aucune œuvre favorite pour l'instant",
-                            message: 'Touchez le cœur sur une œuvre pour la retrouver ici.',
-                            buttonLabel: 'Découvrir des œuvres',
-                            onPressed: _openDiscover,
-                          )
-                        : _ArtworkGrid(
-                            items: _favoriteArtworks,
-                            onRemove: (artwork) {
-                              setState(() => _favoriteArtworks.remove(artwork));
-                            },
-                          ),
-                    _EmptyFavorites(
-                      title: "Aucun artiste favori pour l'instant",
-                      message:
-                          "Touchez le cœur sur le profil d'un artiste pour le "
-                          'retrouver ici et suivre ses nouvelles créations.',
-                      buttonLabel: 'Découvrir des artistes',
-                      onPressed: _openDiscover,
-                    ),
-                    _EmptyFavorites(
-                      title: "Aucun atelier favori pour l'instant",
-                      message: 'Touchez le cœur sur un atelier pour le retrouver ici.',
-                      buttonLabel: 'Découvrir des ateliers',
-                      onPressed: _openDiscover,
-                    ),
-                    _EmptyFavorites(
-                      title: "Aucun évènement favori pour l'instant",
-                      message: 'Touchez le cœur sur un évènement pour le retrouver ici.',
-                      buttonLabel: 'Découvrir des évènements',
-                      onPressed: _openDiscover,
-                    ),
-                  ],
+                  children: [for (var i = 0; i < _types.length; i++) _favoritesTab(i)],
                 ),
               ),
             ],
@@ -300,15 +364,16 @@ class _ArtworkCard extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 2),
-        Text(
-          artwork.price,
-          style: const TextStyle(
-            color: Color(0xFFFA7B6B),
-            fontSize: 8,
-            fontWeight: FontWeight.w700,
-            fontFamily: 'Inter',
+        if (artwork.price.isNotEmpty)
+          Text(
+            artwork.price,
+            style: const TextStyle(
+              color: Color(0xFFFA7B6B),
+              fontSize: 8,
+              fontWeight: FontWeight.w700,
+              fontFamily: 'Inter',
+            ),
           ),
-        ),
       ],
     );
   }

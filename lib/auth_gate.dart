@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import 'Screens/Login_screen.dart';
-import 'Screens/search_screen.dart';
+import 'screens/login_screen.dart';
+import 'screens/search_screen.dart';
 import 'app_session.dart';
 
 class AuthGate extends StatelessWidget {

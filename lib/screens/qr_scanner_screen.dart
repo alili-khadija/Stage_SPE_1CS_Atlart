@@ -4,9 +4,10 @@ import '../theme/atlart_ui_theme.dart';
 import 'event_draft.dart';
 
 class QrScannerScreen extends StatefulWidget {
-  const QrScannerScreen({super.key, required this.waitingParticipants});
+  const QrScannerScreen({super.key, required this.waitingParticipants, this.previewMode = true});
 
   final List<EventParticipant> waitingParticipants;
+  final bool previewMode;
 
   @override
   State<QrScannerScreen> createState() => _QrScannerScreenState();
@@ -17,6 +18,14 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
 
   Future<void> _simulateScan() async {
     if (_scanning) return;
+    if (!widget.previewMode) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Le scanner caméra n’est pas encore relié. Utilisez le pointage manuel.'),
+        ),
+      );
+      return;
+    }
     if (widget.waitingParticipants.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Aucun billet validé à scanner.')),
@@ -69,7 +78,9 @@ class _QrScannerScreenState extends State<QrScannerScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Text(
-              widget.waitingParticipants.isEmpty
+              !widget.previewMode
+                  ? 'Le scanner caméra sera disponible prochainement. Le pointage manuel est relié au serveur.'
+                  : widget.waitingParticipants.isEmpty
                   ? 'Aucun participant validé en attente de pointage.'
                   : 'Mode aperçu : appuyez dans le cadre pour simuler un scan QR.',
               textAlign: TextAlign.center,

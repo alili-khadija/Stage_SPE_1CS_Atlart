@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../models/event_detail.dart';
 import '../models/event_registration.dart';
+import '../widgets/favorite_action_button.dart';
 import '../widgets/event_ui.dart';
 import 'event_registration_form_screen.dart';
 import 'registration_sent_screen.dart';
@@ -14,12 +15,14 @@ class EventDetailPage extends StatefulWidget {
     this.onViewOrganizer,
     this.onMore,
     this.onViewRegistrations,
+    this.favoriteId,
   });
 
   final EventDetail event;
   final VoidCallback? onViewOrganizer;
   final VoidCallback? onMore;
   final VoidCallback? onViewRegistrations;
+  final String? favoriteId;
 
   @override
   State<EventDetailPage> createState() => _EventDetailPageState();
@@ -154,7 +157,18 @@ class _EventDetailPageState extends State<EventDetailPage> {
           Positioned(
             top: topPadding + 12,
             right: 20,
-            child: _RoundButton(icon: Icons.more_horiz, onTap: widget.onMore),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FavoriteActionButton(
+                  entityType: 'EVENEMENT',
+                  entityId: widget.favoriteId,
+                  size: 34,
+                ),
+                const SizedBox(width: 8),
+                _RoundButton(icon: Icons.more_horiz, onTap: widget.onMore),
+              ],
+            ),
           ),
           Positioned(
             left: 26,

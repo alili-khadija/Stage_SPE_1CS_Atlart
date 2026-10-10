@@ -97,6 +97,7 @@ class AtlartSession extends ChangeNotifier {
     required String paysCode,
     String? localisation,
     required String roleSouhaite,
+    int? localiteId,
   }) async {
     if (!AuthApi.useBackend) {
       // Local preview only: use the requested role to preview its UI.
@@ -122,6 +123,7 @@ class AtlartSession extends ChangeNotifier {
       paysCode: paysCode,
       localisation: localisation,
       roleSouhaite: roleSouhaite,
+        localiteId: localiteId,
     );
     await _save(result.token, result.user);
   }

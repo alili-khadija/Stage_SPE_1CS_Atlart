@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../app_session.dart';
+import '../services/auth_api.dart';
+import '../services/oeuvre_api.dart';
 import '../theme/atlart_layout.dart';
 import '../theme/atlart_ui_theme.dart';
 import '../widgets/atlart_logo_step_header.dart';
@@ -71,6 +73,7 @@ class ArtisanArticle {
     this.fragile = false,
     this.cashOnDelivery = false,
     this.returnPolicy = ReturnPolicy.none,
+    this.backendId,
   });
 
   final String name;
@@ -112,6 +115,43 @@ class ArtisanArticle {
   final bool fragile;
   final bool cashOnDelivery;
   final ReturnPolicy returnPolicy;
+  final String? backendId;
+
+  ArtisanArticle withBackendId(String id) => ArtisanArticle(
+        name: name,
+        category: category,
+        model: model,
+        quantity: quantity,
+        price: price,
+        currency: currency,
+        description: description,
+        photoPath: photoPath,
+        contactPhone: contactPhone,
+        photoPaths: photoPaths,
+        materials: materials,
+        technique: technique,
+        origin: origin,
+        dimensions: dimensions,
+        weightKg: weightKg,
+        careInstructions: careInstructions,
+        customizable: customizable,
+        availability: availability,
+        leadTimeDays: leadTimeDays,
+        variants: variants,
+        sku: sku,
+        lowStockAlert: lowStockAlert,
+        pickupAtWorkshop: pickupAtWorkshop,
+        homeDelivery: homeDelivery,
+        stopDesk: stopDesk,
+        freeShipping: freeShipping,
+        shippingFee: shippingFee,
+        shipsAbroad: shipsAbroad,
+        prepDays: prepDays,
+        fragile: fragile,
+        cashOnDelivery: cashOnDelivery,
+        returnPolicy: returnPolicy,
+        backendId: id,
+      );
 
   /// Libellé de stock prêt à afficher sur la carte du profil.
   String get stockLabel => switch (availability) {
@@ -765,10 +805,58 @@ class _AddArticleScreenState extends State<AddArticleScreen> {
     }
   }
 
-  /// À brancher sur l'API Laravel (POST article) le moment venu.
   Future<ArtisanArticle> _saveArticle(ArtisanArticle article) async {
-    await Future<void>.delayed(const Duration(milliseconds: 600));
-    return article;
+    if (!AuthApi.useBackend) {
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      return article;
+    }
+    final id = await OeuvreApi.publishArtisanArticle(
+      article: {
+        'titre': article.name,
+        'categorie': 'ARTISANAT',
+        'categorie_detaillee': article.category,
+        'modele': article.model,
+        'quantite_disponible': article.quantity,
+        'devise': article.currency,
+        'technique': article.technique,
+        'dimensions': article.dimensions,
+        'description': article.description,
+        'prix_fixe': 'FIXE',
+        'prix_depart': article.price,
+        'disponibilite': 'OUVERTE_PROPOSITIONS',
+        'details_commerce': {
+          'materials': article.materials,
+          'origin': article.origin,
+          'weight_kg': article.weightKg,
+          'care_instructions': article.careInstructions,
+          'customizable': article.customizable,
+          'availability': article.availability.name,
+          'lead_time_days': article.leadTimeDays,
+          'variants': [
+            for (final variant in article.variants)
+              {
+                'name': variant.name,
+                'quantity': variant.quantity,
+                'price_extra': variant.priceExtra,
+              },
+          ],
+          'sku': article.sku,
+          'low_stock_alert': article.lowStockAlert,
+          'pickup_at_workshop': article.pickupAtWorkshop,
+          'home_delivery': article.homeDelivery,
+          'stop_desk': article.stopDesk,
+          'free_shipping': article.freeShipping,
+          'shipping_fee': article.shippingFee,
+          'ships_abroad': article.shipsAbroad,
+          'prep_days': article.prepDays,
+          'fragile': article.fragile,
+          'cash_on_delivery': article.cashOnDelivery,
+          'return_policy': article.returnPolicy.name,
+        },
+      },
+      photoPaths: article.photoPaths,
+    );
+    return article.withBackendId(id);
   }
 
   void _closeOverlay() => setState(() => _result = _FormResult.none);

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -9,6 +11,10 @@ import '../widgets/atlart_search_widgets.dart';
 import '../widgets/profile_shared_widgets.dart';
 import '../models/event_detail.dart';
 import '../models/event_registration.dart';
+import '../services/auth_api.dart';
+import '../services/favorite_api.dart';
+import '../services/follow_api.dart';
+import '../services/search_api.dart';
 import 'advanced_filters_sheet.dart';
 import 'favoris_screen.dart';
 import 'Item_detail_screen.dart';
@@ -40,6 +46,9 @@ class SearchResultItem {
     this.eventTab = 0,
     this.eventDetail,
     this.registrationStatus,
+    this.backendId,
+    this.entityType,
+    this.availableStock,
   });
 
   final String title;
@@ -66,6 +75,9 @@ class SearchResultItem {
   final int eventTab;
   final EventDetail? eventDetail;
   final EventRegistrationStatus? registrationStatus;
+  final String? backendId;
+  final String? entityType;
+  final int? availableStock;
 }
 
 class SearchArtist {
@@ -78,6 +90,7 @@ class SearchArtist {
     this.rating = 0,
     this.reviews = 0,
     this.following = false,
+    this.backendId,
   });
 
   final String name;
@@ -88,6 +101,7 @@ class SearchArtist {
   final double rating;
   final int reviews;
   final bool following;
+  final String? backendId;
 }
 
 // ---------------------------------------------------------------------------
@@ -186,18 +200,32 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
   late AdvancedSearchFilters _filters;
 
   // Démo locale : à brancher sur l'historique réel plus tard.
-  final List<String> _recent = [
-    'Céramique Fès',
-    'Tapis berbère',
-    'Art contemporain marocain',
-  ];
+  final List<String> _recent = [];
 
-  // Démo locale : à brancher sur la table `abonnement`.
+  // État affiché pour les profils chargés ; l’écriture est confirmée par l’API.
   final Set<String> _following = {};
+  final Set<String> _favoriteKeys = {};
   final List<EventDraft> _createdEvents = [];
 
   int _eventTab = 0;
   int _navIndex = 0;
+  List<SearchResultItem>? _remoteArtworks;
+  List<SearchResultItem>? _remoteArtisanat;
+  List<SearchResultItem>? _remoteEvents;
+  List<SearchArtist>? _remoteArtists;
+  bool _searchLoading = false;
+  String? _searchError;
+  int _searchRequest = 0;
+  Timer? _searchDebounce;
+  String _remoteQuery = '';
+  String? _remoteCountry;
+  List<String> _remoteCategories = const [];
+  List<String> _remoteTags = const [];
+
+  List<SearchResultItem> get _artworks => _remoteArtworks ?? widget.artworks;
+  List<SearchResultItem> get _artisanat => _remoteArtisanat ?? widget.artisanat;
+  List<SearchResultItem> get _events => _remoteEvents ?? widget.events;
+  List<SearchArtist> get _artists => _remoteArtists ?? widget.artists;
 
   @override
   void initState() {
@@ -227,10 +255,117 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
     for (final artist in widget.artists) {
       if (artist.following) _following.add(artist.name);
     }
+    _loadRemoteSearch();
+    _loadRecentSearches();
+    _loadFavoriteKeys();
+  }
+
+  Future<void> _loadRecentSearches() async {
+    final token = AtlartSession.instance.token;
+    if (!AuthApi.useBackend || token == null) return;
+    try {
+      final terms = await RecentSearchApi.list(token);
+      if (!mounted) return;
+      setState(() {
+        _recent
+          ..clear()
+          ..addAll(terms.take(6));
+      });
+    } catch (error) {
+      debugPrint('Could not load recent searches: $error');
+    }
+  }
+
+  Future<void> _loadFavoriteKeys() async {
+    final token = AtlartSession.instance.token;
+    if (!AuthApi.useBackend || token == null) return;
+    try {
+      final rows = await FavoriteApi.list(token);
+      if (!mounted) return;
+      setState(() {
+        _favoriteKeys
+          ..clear()
+          ..addAll(rows.map((row) => '${row['entite_type']}:${row['entite_id']}'));
+      });
+    } on FavoriteApiException catch (error) {
+      debugPrint('Could not load favorite keys: $error');
+    }
+  }
+
+  Future<void> _toggleFavorite(SearchResultItem item) async {
+    final id = item.backendId;
+    final type = item.entityType;
+    final token = AtlartSession.instance.token;
+    if (id == null || type == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Cette œuvre de démonstration n’est pas reliée au catalogue.'),
+        ),
+      );
+      return;
+    }
+    if (!AuthApi.useBackend || token == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Connectez-vous pour enregistrer ce favori.')),
+      );
+      return;
+    }
+    final key = '$type:$id';
+    final isFavorite = _favoriteKeys.contains(key);
+    try {
+      if (isFavorite) {
+        await FavoriteApi.remove(token, type, id);
+      } else {
+        await FavoriteApi.add(token, type, id);
+      }
+      if (!mounted) return;
+      setState(() {
+        if (isFavorite) {
+          _favoriteKeys.remove(key);
+        } else {
+          _favoriteKeys.add(key);
+        }
+      });
+    } on FavoriteApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.message)),
+        );
+      }
+    }
+  }
+
+  Future<void> _removeRecentSearch(String term) async {
+    setState(() => _recent.remove(term));
+    final token = AtlartSession.instance.token;
+    if (!AuthApi.useBackend || token == null) return;
+    try {
+      await RecentSearchApi.remove(token, term);
+    } catch (error) {
+      debugPrint('Could not remove recent search: $error');
+      _loadRecentSearches();
+    }
+  }
+
+  Future<void> _clearRecentSearches() async {
+    final previous = List<String>.from(_recent);
+    setState(_recent.clear);
+    final token = AtlartSession.instance.token;
+    if (!AuthApi.useBackend || token == null) return;
+    try {
+      await RecentSearchApi.clear(token);
+    } catch (error) {
+      debugPrint('Could not clear recent searches: $error');
+      if (!mounted) return;
+      setState(() => _recent
+        ..clear()
+        ..addAll(previous));
+    }
   }
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _controller.dispose();
     _focus.dispose();
     super.dispose();
@@ -275,21 +410,42 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
   bool _matchesTags(List<String> tags) =>
       _filters.tags.isEmpty || tags.any(_filters.tags.contains);
 
+  bool get _remoteMatchesCurrentFilters {
+    final country = _filters.country == _kAllCountries ? null : _filters.country;
+    return _remoteQuery == _controller.text.trim() &&
+        _remoteCountry == country &&
+        _sameValues(_remoteCategories, _filters.categories) &&
+        _sameValues(_remoteTags, _filters.tags);
+  }
+
+  bool _sameValues(Iterable<String> left, Iterable<String> right) {
+    final a = left.toSet();
+    final b = right.toSet();
+    return a.length == b.length && a.containsAll(b);
+  }
+
   List<SearchResultItem> _filterItems(List<SearchResultItem> items) {
     return items.where((item) {
+      final fromServer = _remoteArtworks?.contains(item) == true ||
+          _remoteArtisanat?.contains(item) == true ||
+          _remoteEvents?.contains(item) == true;
+      if (fromServer && _remoteMatchesCurrentFilters) return true;
       return _matchesQuery('${item.title} ${item.subtitle}') &&
           _matchesCountry(item.country) &&
-          _matchesTags(item.tags);
+          (fromServer || _matchesTags(item.tags));
     }).toList();
   }
 
-  List<SearchArtist> get _filteredArtists => widget.artists.where((artist) {
-    return _matchesQuery('${artist.name} ${artist.specialty} ${artist.city}') &&
-        _matchesCountry(artist.country);
-  }).toList();
+  List<SearchArtist> get _filteredArtists {
+    if (_remoteArtists != null && _remoteMatchesCurrentFilters) return _artists;
+    return _artists.where((artist) {
+      return _matchesQuery('${artist.name} ${artist.specialty} ${artist.city}') &&
+          _matchesCountry(artist.country);
+    }).toList();
+  }
 
   List<SearchResultItem> get _allEvents => [
-    ...widget.events,
+    ..._events,
     for (final registration in EventRegistrationStore.instance.registrations)
       _searchItemForRegistration(registration),
     for (final draft in _createdEvents) _searchItemFor(draft),
@@ -332,6 +488,178 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
     return '';
   }
 
+  Future<void> _loadRemoteSearch() async {
+    if (!AuthApi.useBackend) return;
+    _searchDebounce?.cancel();
+    final request = ++_searchRequest;
+    final query = _controller.text.trim();
+    final country = _filters.country == _kAllCountries ? null : _filters.country;
+    final categories = _filters.categories.toList();
+    final tags = _filters.tags.toList();
+    setState(() {
+      _searchLoading = true;
+      _searchError = null;
+    });
+    try {
+      final result = await SearchApi.search(
+        query: query,
+        country: country,
+        categories: categories,
+        tags: tags,
+      );
+      if (!mounted || request != _searchRequest) return;
+      setState(() {
+        _remoteArtworks = result.artworks.map((row) => _itemFromJson(row, 'oeuvre')).toList();
+        _remoteArtisanat = result.artisanat.map((row) => _itemFromJson(row, 'artisanat')).toList();
+        _remoteEvents = result.events.map((row) => _itemFromJson(row, 'evenement')).toList();
+        _remoteArtists = result.artists.map(_artistFromJson).toList();
+        _following
+          ..removeWhere((name) => _remoteArtists!.any((artist) => artist.name == name))
+          ..addAll(_remoteArtists!.where((artist) => artist.following).map((artist) => artist.name));
+        _remoteQuery = query;
+        _remoteCountry = country;
+        _remoteCategories = categories;
+        _remoteTags = tags;
+      });
+    } on SearchApiException catch (error) {
+      if (!mounted || request != _searchRequest) return;
+      setState(() {
+        _searchError = error.message;
+        _remoteArtworks = null;
+        _remoteArtisanat = null;
+        _remoteEvents = null;
+        _remoteArtists = null;
+      });
+    } finally {
+      if (mounted && request == _searchRequest) {
+        setState(() => _searchLoading = false);
+      }
+    }
+  }
+
+  SearchResultItem _itemFromJson(Map<String, dynamic> json, String kind) {
+    final rawTags = json['tags'] ?? json['etiquettes'] ?? json['categories'];
+    final tags = rawTags is List
+        ? rawTags.map((value) => value.toString()).toList()
+        : rawTags is String
+            ? rawTags.split(',').map((value) => value.trim()).where((value) => value.isNotEmpty).toList()
+            : <String>[];
+    final artist = _mapValue(json['artiste']);
+    final location = _mapValue(json['lieu']) ?? _mapValue(artist?['lieu']);
+    final placeName = _stringValue(location ?? const {}, ['ville'], '');
+    final artistName = _stringValue(artist ?? const {}, ['nom_emprunt', 'name'], '');
+    final country = _countryName(_stringValue(location ?? const {}, ['pays_code'],
+        _stringValue(json, ['country', 'pays', 'pays_nom'], '')));
+    final date = _optionalString(json, ['date_label', 'date', 'dates']) ??
+        _eventDate(json);
+    final subtitle = _optionalString(json, ['subtitle', 'sous_titre']) ??
+        (kind == 'evenement'
+            ? '${_stringValue(json, ['type'], 'Événement')} · $placeName'
+            : [artistName, placeName].where((value) => value.isNotEmpty).join(' · '));
+    final price = _optionalString(json, ['price_label', 'prix_formate', 'price', 'prix']) ??
+        _priceLabel(json);
+    final event = kind == 'evenement'
+        ? EventDetail(
+            id: _stringValue(json, ['id'], EventDetail.idFromTitle(_stringValue(json, ['titre'], ''))),
+            title: _stringValue(json, ['titre', 'title', 'name'], 'Événement'),
+            category: _stringValue(json, ['type'], 'Événement'),
+            dateLabel: date ?? '',
+            location: placeName.isEmpty ? country : '$placeName, $country',
+            modeLabel: _stringValue(json, ['mode'], 'PRESENTIEL') == 'VIRTUEL' ? 'En ligne' : 'Présentiel',
+            placesLeft: null,
+            requiresValidation: true,
+            organizer: _mapValue(json['organisateur']) == null
+                ? null
+                : EventOrganizer(
+                    name: _stringValue(_mapValue(json['organisateur'])!, ['nom_emprunt'], 'Organisateur'),
+                    location: placeName,
+                  ),
+          )
+        : null;
+    return SearchResultItem(
+      title: _stringValue(json, ['title', 'titre', 'name', 'nom_emprunt', 'nom'], 'Sans titre'),
+      backendId: _optionalString(json, ['id', 'id_oeuvre']),
+      entityType: kind == 'oeuvre' || kind == 'artisanat' ? 'OEUVRE' : null,
+      availableStock: int.tryParse(
+        '${json['quantite_disponible'] ?? json['stock'] ?? ''}',
+      ),
+      subtitle: subtitle,
+      country: country,
+      tags: tags,
+      priceFrom: price,
+      dateLabel: date,
+      eventDetail: event,
+      offerable: json['offerable'] as bool? ??
+          _stringValue(json, ['disponibilite'], '') == 'OUVERTE_PROPOSITIONS',
+      purchaseable: json['purchaseable'] as bool? ?? kind == 'artisanat',
+      featured: json['featured'] as bool? ?? json['mise_en_avant'] as bool? ?? false,
+      rating: _numberValue(json['rating'] ?? json['note']),
+    );
+  }
+
+  SearchArtist _artistFromJson(Map<String, dynamic> json) => SearchArtist(
+        backendId: _optionalString(
+          json,
+          ['id', 'id_utilisateur', 'utilisateur_id', 'id_artiste', 'id_artisan'],
+        ),
+        name: _stringValue(json, ['name', 'nom', 'display_name', 'nom_emprunt'], 'Artiste'),
+        specialty: _stringValue(json, ['specialty', 'specialite', 'role'], ''),
+        city: _stringValue(_mapValue(json['lieu']) ?? json, ['city', 'ville', 'localisation'], ''),
+        country: _countryName(_stringValue(_mapValue(json['lieu']) ?? json, ['pays_code', 'country', 'pays', 'pays_nom'], '')),
+        verified: json['verified'] as bool? ?? json['verifie'] as bool? ?? false,
+        rating: _numberValue(json['rating'] ?? json['note']),
+        reviews: int.tryParse('${json['reviews'] ?? json['avis'] ?? 0}') ?? 0,
+        following: json['est_suivi'] as bool? ?? json['following'] as bool? ?? false,
+      );
+
+  String _stringValue(Map<String, dynamic> json, List<String> keys, String fallback) {
+    for (final key in keys) {
+      final value = json[key];
+      if (value != null && value.toString().trim().isNotEmpty) return value.toString();
+    }
+    return fallback;
+  }
+
+  String? _optionalString(Map<String, dynamic> json, List<String> keys) {
+    for (final key in keys) {
+      final value = json[key];
+      if (value != null && value.toString().trim().isNotEmpty) return value.toString();
+    }
+    return null;
+  }
+
+  double _numberValue(Object? value) => double.tryParse('$value') ?? 0;
+
+  Map<String, dynamic>? _mapValue(Object? value) =>
+      value is Map ? Map<String, dynamic>.from(value) : null;
+
+  String _countryName(String codeOrName) => switch (codeOrName.toUpperCase()) {
+        'DZ' => 'Algérie',
+        'MA' => 'Maroc',
+        'TN' => 'Tunisie',
+        'LY' => 'Libye',
+        'MR' => 'Mauritanie',
+        _ => codeOrName,
+      };
+
+  String? _eventDate(Map<String, dynamic> json) {
+    final start = _optionalString(json, ['date_debut']);
+    final end = _optionalString(json, ['date_fin']);
+    if (start == null) return null;
+    return end == null || end == start ? start : '$start – $end';
+  }
+
+  String _priceLabel(Map<String, dynamic> json) {
+    final price = _optionalString(json, ['prix_depart']);
+    if (price == null) return 'Prix sur demande';
+    final currency = _stringValue(json, ['devise'], 'DZD');
+    final amount = double.tryParse(price);
+    final shown = amount == null || amount == amount.roundToDouble()
+        ? amount?.toStringAsFixed(0) ?? price
+        : amount.toStringAsFixed(2);
+    return '$shown $currency';
+  }
+
   void _openEvent(SearchResultItem item) {
     final event =
         item.eventDetail ??
@@ -350,6 +678,7 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
       MaterialPageRoute<void>(
         builder: (_) => EventDetailPage(
           event: event,
+          favoriteId: item.backendId,
           onViewRegistrations: _showEventRegistrations,
         ),
       ),
@@ -366,15 +695,15 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
   }
 
   List<SearchResultItem> get _featured {
-    final all = [...widget.artworks, ...widget.artisanat];
+    final all = [..._artworks, ..._artisanat];
     final flagged = all.where((i) => i.featured).toList();
     return flagged.isNotEmpty ? flagged : all.take(3).toList();
   }
 
   int get _resultCount {
     var n = 0;
-    if (_catActive('Œuvres')) n += _filterItems(widget.artworks).length;
-    if (_catActive('Artisanat')) n += _filterItems(widget.artisanat).length;
+    if (_catActive('Œuvres')) n += _filterItems(_artworks).length;
+    if (_catActive('Artisanat')) n += _filterItems(_artisanat).length;
     if (_catActive('Événements')) n += _filterItems(_allEvents).length;
     if (_catActive('Artistes')) n += _filteredArtists.length;
     return n;
@@ -400,9 +729,29 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
       _recent.removeWhere((s) => s.toLowerCase() == text.toLowerCase());
       _recent.insert(0, text);
       if (_recent.length > 6) _recent.removeLast();
+      final token = AtlartSession.instance.token;
+      if (AuthApi.useBackend && token != null) {
+        RecentSearchApi.save(token, text).then((_) {
+          if (mounted) _loadRecentSearches();
+        }).catchError((Object error) {
+          debugPrint('Could not save recent search: $error');
+        });
+      }
     }
     _focus.unfocus();
     setState(() {});
+    _loadRemoteSearch();
+  }
+
+  void _onSearchChanged(String _) {
+    setState(() {});
+    if (!AuthApi.useBackend) return;
+    _searchDebounce?.cancel();
+    final request = ++_searchRequest;
+    _searchDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (!mounted || request != _searchRequest) return;
+      _loadRemoteSearch();
+    });
   }
 
   void _selectRecent(String search) {
@@ -419,6 +768,7 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
         ..addAll(already ? <String>[] : [key]);
       _eventTab = 0;
     });
+    _loadRemoteSearch();
   }
 
   void _selectCountry(String country) {
@@ -429,6 +779,7 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
         tags: Set<String>.from(_filters.tags),
       );
     });
+    _loadRemoteSearch();
   }
 
   void _resetAll() {
@@ -438,6 +789,7 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
       _filters = AdvancedSearchFilters();
       _eventTab = 0;
     });
+    _loadRemoteSearch();
   }
 
   Future<void> _openAdvancedFilters() async {
@@ -451,12 +803,45 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
 
     if (!mounted || result == null) return;
     setState(() => _filters = result);
+    _loadRemoteSearch();
   }
 
-  void _toggleFollow(SearchArtist artist) {
-    setState(() {
-      if (!_following.add(artist.name)) _following.remove(artist.name);
-    });
+  Future<void> _toggleFollow(SearchArtist artist) async {
+    final userId = artist.backendId;
+    final token = AtlartSession.instance.token;
+    if (userId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ce profil de démonstration n’est pas relié au catalogue.')),
+      );
+      return;
+    }
+    if (!AuthApi.useBackend || token == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Connectez-vous pour suivre ce profil.')),
+      );
+      return;
+    }
+    final wasFollowing = _following.contains(artist.name);
+    try {
+      await FollowApi.setFollowing(
+        token: token,
+        userId: userId,
+        follow: !wasFollowing,
+      );
+      if (!mounted) return;
+      setState(() {
+        if (wasFollowing) {
+          _following.remove(artist.name);
+        } else {
+          _following.add(artist.name);
+        }
+      });
+    } on FollowApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message)),
+      );
+    }
   }
 
   void _showNotAvailable() {
@@ -488,10 +873,10 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
 
   Widget _content() {
     final artworks = _catActive('Œuvres')
-        ? _filterItems(widget.artworks)
+        ? _filterItems(_artworks)
         : <SearchResultItem>[];
     final crafts = _catActive('Artisanat')
-        ? _filterItems(widget.artisanat)
+        ? _filterItems(_artisanat)
         : <SearchResultItem>[];
     final events = _catActive('Événements')
         ? _filterItems(_allEvents)
@@ -525,9 +910,21 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
           onToggleFollow: _toggleFollow,
         );
       case 'Œuvres':
-        return artworks.isEmpty ? empty : _ItemGrid(items: artworks);
+        return artworks.isEmpty
+            ? empty
+            : _ItemGrid(
+                items: artworks,
+                favoriteKeys: _favoriteKeys,
+                onFavorite: _toggleFavorite,
+              );
       case 'Artisanat':
-        return crafts.isEmpty ? empty : _ItemGrid(items: crafts);
+        return crafts.isEmpty
+            ? empty
+            : _ItemGrid(
+                items: crafts,
+                favoriteKeys: _favoriteKeys,
+                onFavorite: _toggleFavorite,
+              );
       default:
         break;
     }
@@ -543,18 +940,27 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.only(top: 6, bottom: 24),
       children: [
-        if (!_filtering) _FeaturedCarousel(items: _featured),
+        if (!_filtering)
+          _FeaturedCarousel(
+            items: _featured,
+            favoriteKeys: _favoriteKeys,
+            onFavorite: _toggleFavorite,
+          ),
         if (artworks.isNotEmpty)
           _ItemSection(
             title: 'ŒUVRES',
             items: artworks,
             onSeeAll: () => _toggleCategory('Œuvres'),
+            favoriteKeys: _favoriteKeys,
+            onFavorite: _toggleFavorite,
           ),
         if (crafts.isNotEmpty)
           _ItemSection(
             title: 'ARTISANAT',
             items: crafts,
             onSeeAll: () => _toggleCategory('Artisanat'),
+            favoriteKeys: _favoriteKeys,
+            onFavorite: _toggleFavorite,
           ),
         if (artists.isNotEmpty)
           _ArtistSection(
@@ -604,7 +1010,7 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
                   child: _SearchBar(
                     controller: _controller,
                     focusNode: _focus,
-                    onChanged: (_) => setState(() {}),
+                    onChanged: _onSearchChanged,
                     onSubmitted: _submit,
                     onFilterTap: _openAdvancedFilters,
                     filterCount: _advancedCount,
@@ -614,8 +1020,8 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
                   visible: _focus.hasFocus && recents.isNotEmpty,
                   items: recents,
                   onSelect: _selectRecent,
-                  onRemove: (s) => setState(() => _recent.remove(s)),
-                  onClear: () => setState(_recent.clear),
+                  onRemove: _removeRecentSearch,
+                  onClear: _clearRecentSearches,
                 ),
                 _CategoryChips(selected: _cats, onTap: _toggleCategory),
                 _CountryPills(
@@ -623,6 +1029,17 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
                   selected: _filters.country,
                   onTap: _selectCountry,
                 ),
+                if (_searchLoading) const LinearProgressIndicator(minHeight: 2),
+                if (_searchError != null)
+                  MaterialBanner(
+                    content: Text('Résultats de démonstration affichés : $_searchError'),
+                    actions: [
+                      TextButton(
+                        onPressed: _loadRemoteSearch,
+                        child: const Text('Réessayer'),
+                      ),
+                    ],
+                  ),
                 Expanded(
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 220),
@@ -1077,9 +1494,15 @@ class _Chip extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _FeaturedCarousel extends StatefulWidget {
-  const _FeaturedCarousel({required this.items});
+  const _FeaturedCarousel({
+    required this.items,
+    required this.favoriteKeys,
+    required this.onFavorite,
+  });
 
   final List<SearchResultItem> items;
+  final Set<String> favoriteKeys;
+  final ValueChanged<SearchResultItem> onFavorite;
 
   @override
   State<_FeaturedCarousel> createState() => _FeaturedCarouselState();
@@ -1116,7 +1539,14 @@ class _FeaturedCarouselState extends State<_FeaturedCarousel> {
               onPageChanged: (i) => setState(() => _page = i),
               itemBuilder: (context, index) => Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 5),
-                child: _FeaturedCard(item: widget.items[index], index: index),
+                child: _FeaturedCard(
+                  item: widget.items[index],
+                  index: index,
+                  isFavorite: widget.favoriteKeys.contains(
+                    '${widget.items[index].entityType}:${widget.items[index].backendId}',
+                  ),
+                  onFavorite: widget.onFavorite,
+                ),
               ),
             ),
           ),
@@ -1149,10 +1579,17 @@ class _FeaturedCarouselState extends State<_FeaturedCarousel> {
 }
 
 class _FeaturedCard extends StatelessWidget {
-  const _FeaturedCard({required this.item, required this.index});
+  const _FeaturedCard({
+    required this.item,
+    required this.index,
+    required this.isFavorite,
+    required this.onFavorite,
+  });
 
   final SearchResultItem item;
   final int index;
+  final bool isFavorite;
+  final ValueChanged<SearchResultItem> onFavorite;
 
   @override
   Widget build(BuildContext context) {
@@ -1160,7 +1597,9 @@ class _FeaturedCard extends StatelessWidget {
     final flag = _kFlags[item.country];
 
     return GestureDetector(
-      onTap: item.offerable ? () => _openItemDetails(context, item) : null,
+      onTap: item.offerable || item.purchaseable
+          ? () => _openItemDetails(context, item)
+          : null,
       child: Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(18),
@@ -1297,11 +1736,15 @@ class _ItemSection extends StatelessWidget {
     required this.title,
     required this.items,
     required this.onSeeAll,
+    required this.favoriteKeys,
+    required this.onFavorite,
   });
 
   final String title;
   final List<SearchResultItem> items;
   final VoidCallback onSeeAll;
+  final Set<String> favoriteKeys;
+  final ValueChanged<SearchResultItem> onFavorite;
 
   @override
   Widget build(BuildContext context) {
@@ -1318,7 +1761,13 @@ class _ItemSection extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: _kHPad),
               itemCount: items.length,
               separatorBuilder: (_, _) => const SizedBox(width: 12),
-              itemBuilder: (context, index) => _ItemCard(item: items[index]),
+              itemBuilder: (context, index) => _ItemCard(
+                item: items[index],
+                isFavorite: favoriteKeys.contains(
+                  '${items[index].entityType}:${items[index].backendId}',
+                ),
+                onFavorite: onFavorite,
+              ),
             ),
           ),
         ],
@@ -1328,9 +1777,15 @@ class _ItemSection extends StatelessWidget {
 }
 
 class _ItemGrid extends StatelessWidget {
-  const _ItemGrid({required this.items});
+  const _ItemGrid({
+    required this.items,
+    required this.favoriteKeys,
+    required this.onFavorite,
+  });
 
   final List<SearchResultItem> items;
+  final Set<String> favoriteKeys;
+  final ValueChanged<SearchResultItem> onFavorite;
 
   @override
   Widget build(BuildContext context) {
@@ -1350,6 +1805,10 @@ class _ItemGrid extends StatelessWidget {
                     item: item,
                     width: width,
                     imageHeight: width * 0.85,
+                    isFavorite: favoriteKeys.contains(
+                      '${item.entityType}:${item.backendId}',
+                    ),
+                    onFavorite: onFavorite,
                   ),
               ],
             );
@@ -1363,11 +1822,15 @@ class _ItemGrid extends StatelessWidget {
 class _ItemCard extends StatelessWidget {
   const _ItemCard({
     required this.item,
+    required this.isFavorite,
+    required this.onFavorite,
     this.width = 128,
     this.imageHeight = 104,
   });
 
   final SearchResultItem item;
+  final bool isFavorite;
+  final ValueChanged<SearchResultItem> onFavorite;
   final double width;
   final double imageHeight;
 
@@ -1378,7 +1841,9 @@ class _ItemCard extends StatelessWidget {
     return SizedBox(
       width: width,
       child: InkWell(
-        onTap: item.offerable ? () => _openItemDetails(context, item) : null,
+        onTap: item.offerable || item.purchaseable
+            ? () => _openItemDetails(context, item)
+            : null,
         borderRadius: BorderRadius.circular(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1468,6 +1933,40 @@ class _ItemCard extends StatelessWidget {
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FavoriteHeart extends StatelessWidget {
+  const _FavoriteHeart({
+    required this.selected,
+    required this.onTap,
+    this.size = 38,
+  });
+
+  final bool selected;
+  final VoidCallback onTap;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      shape: const CircleBorder(),
+      elevation: 2,
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Icon(
+            selected ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+            size: size * 0.52,
+            color: AtlartPalette.coral,
+          ),
         ),
       ),
     );
@@ -1571,7 +2070,8 @@ void _openItemDetails(BuildContext context, SearchResultItem item) {
       MaterialPageRoute<void>(
         builder: (_) => ArtisanProductDetailScreen(
           product: Product(
-            id: EventDetail.idFromTitle(item.title),
+            id: item.backendId ?? EventDetail.idFromTitle(item.title),
+            backendId: item.backendId,
             title: item.title,
             price: amount,
             currency: currencyMatch?.group(0) ?? 'DZD',
@@ -1579,10 +2079,10 @@ void _openItemDetails(BuildContext context, SearchResultItem item) {
             description:
                 'Article artisanal réalisé par ${workshop.isEmpty ? 'un atelier local' : workshop}. '
                 'Chaque pièce met en valeur un savoir-faire traditionnel.',
-            stock: 12,
+            stock: item.availableStock,
             artisanName: workshop,
             artisanLocation: location,
-            deliveryFee: 600,
+            deliveryFee: item.backendId == null ? 600 : 0,
             imageAsset: item.imageAsset,
             imagePath: item.imagePath,
           ),
@@ -1616,6 +2116,7 @@ void _openItemDetails(BuildContext context, SearchResultItem item) {
               'Cette création met en valeur le savoir-faire et les techniques '
               'artisanales transmis au sein de l’atelier.',
           imageAsset: item.imageAsset,
+          favoriteId: item.backendId,
         ),
       ),
     ),
@@ -1654,6 +2155,8 @@ void _openArtist(BuildContext context, SearchArtist artist) {
         tags: const [TagChip(label: 'Artiste')],
         works: const <ProfileWork>[],
         isMe: false,
+        isFollowing: artist.following,
+        favoriteId: artist.backendId,
       ),
     ),
   );

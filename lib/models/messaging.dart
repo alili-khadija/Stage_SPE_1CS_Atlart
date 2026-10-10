@@ -3,6 +3,10 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart' show Color;
 
+import '../app_session.dart';
+import '../services/auth_api.dart';
+import '../services/conversation_api.dart';
+
 // ─────────────────────────────────────────────────────────────────────────
 //  Messagerie Atlart — même principe que « Contacter l'hôte » sur Airbnb :
 //
@@ -129,7 +133,7 @@ class ChatThread {
   final List<ChatMessage> messages;
 
   /// true : la demande vient de l'autre personne (je suis le destinataire).
-  final bool incoming;
+  bool incoming;
   String? rejectionReason;
   int unread;
 
@@ -191,6 +195,98 @@ class MessageStore extends ChangeNotifier {
   final List<ChatThread> _threads = [];
   int _seq = 100;
 
+  bool get _useRemote =>
+      AuthApi.useBackend && AtlartSession.instance.token != null;
+
+  /// Remplace les exemples locaux par les conversations du compte connecté.
+  Future<void> loadRemote() async {
+    if (!_useRemote) return;
+    final token = AtlartSession.instance.token!;
+    final userId = AtlartSession.instance.user?.id;
+    if (userId == null) return;
+    _threads.clear();
+    notifyListeners();
+    final rows = await ConversationApi.list(token);
+    final remote = <ChatThread>[];
+    for (final row in rows) {
+      final first = row['participant1'] is Map
+          ? Map<String, dynamic>.from(row['participant1'] as Map)
+          : <String, dynamic>{};
+      final second = row['participant2'] is Map
+          ? Map<String, dynamic>.from(row['participant2'] as Map)
+          : <String, dynamic>{};
+      final firstId = '${row['participant_1_id'] ?? first['id_utilisateur'] ?? ''}';
+      final secondId = '${row['participant_2_id'] ?? second['id_utilisateur'] ?? ''}';
+      final isFirst = firstId == userId;
+      final other = isFirst ? second : first;
+      final otherId = isFirst ? secondId : firstId;
+      if (otherId.isEmpty) continue;
+      final threadId = '${row['id']}';
+      final latest = row['latest_message'] is Map
+          ? Map<String, dynamic>.from(row['latest_message'] as Map)
+          : null;
+      final messages = latest == null ? <Map<String, dynamic>>[] : [latest];
+      final parsed = messages.map((message) => _remoteMessage(message, userId)).toList();
+      final latestIsIncoming = parsed.isNotEmpty && !parsed.last.fromMe;
+      final contextKind = switch ('${row['contexte_type'] ?? 'GENERAL'}') {
+        'OEUVRE' => ChatContextKind.work,
+        'ARTICLE' => ChatContextKind.product,
+        'EVENEMENT' => ChatContextKind.event,
+        'PROFIL' => ChatContextKind.artist,
+        _ => ChatContextKind.general,
+      };
+      final threadStatus = switch ('${row['statut'] ?? 'OUVERTE'}') {
+        'EN_ATTENTE_MODERATION' => ThreadStatus.inReview,
+        'TRANSMISE' => ThreadStatus.delivered,
+        'REJETEE' => ThreadStatus.rejected,
+        _ => ThreadStatus.open,
+      };
+      remote.add(ChatThread(
+        id: threadId,
+        participant: ChatParticipant(
+          id: otherId,
+          name: '${other['nom_emprunt'] ?? 'Utilisateur AtlArt'}',
+        ),
+        about: ChatContext(
+          id: '${row['contexte_id'] ?? threadId}',
+          kind: contextKind,
+          title: '${row['contexte_titre'] ?? 'Discussion'}',
+          subtitle: '${row['contexte_sous_titre'] ?? ''}',
+        ),
+        status: threadStatus,
+        rejectionReason: row['motif_refus'] as String?,
+        messages: parsed,
+        incoming: latestIsIncoming,
+        unread: int.tryParse('${row['messages_non_lus'] ?? 0}') ?? 0,
+      ));
+    }
+    _threads
+      ..clear()
+      ..addAll(remote);
+    notifyListeners();
+  }
+
+  Future<void> refreshThread(String threadId) async {
+    if (!_useRemote) return;
+    final thread = byId(threadId);
+    final token = AtlartSession.instance.token;
+    final userId = AtlartSession.instance.user?.id;
+    if (thread == null || token == null || userId == null) return;
+    final rows = await ConversationApi.messages(token, threadId);
+    thread.messages
+      ..clear()
+      ..addAll(rows.map((row) => _remoteMessage(row, userId)));
+    thread.incoming = thread.messages.isNotEmpty && !thread.messages.last.fromMe;
+    notifyListeners();
+  }
+
+  ChatMessage _remoteMessage(Map<String, dynamic> row, String userId) => ChatMessage(
+        id: '${row['id']}',
+        text: '${row['contenu'] ?? ''}',
+        at: DateTime.tryParse('${row['date_envoi'] ?? row['created_at'] ?? ''}') ?? DateTime.now(),
+        fromMe: '${row['expediteur_id']}' == userId,
+      );
+
   /// Plus récents d'abord.
   List<ChatThread> get threads {
     final list = List<ChatThread>.of(_threads);
@@ -209,7 +305,8 @@ class MessageStore extends ChangeNotifier {
 
   ChatThread? find(String participantId, String contextId) {
     for (final t in _threads) {
-      if (t.participant.id == participantId && t.about.id == contextId) {
+      if (t.participant.id == participantId &&
+          (_useRemote || t.about.id == contextId)) {
         return t;
       }
     }
@@ -231,6 +328,41 @@ class MessageStore extends ChangeNotifier {
 
     final reason = MessageGuard.check(text);
     if (reason != null) throw StateError(reason);
+
+    if (_useRemote) {
+      final token = AtlartSession.instance.token!;
+      final contextType = switch (about.kind) {
+        ChatContextKind.work => 'OEUVRE',
+        ChatContextKind.product => 'ARTICLE',
+        ChatContextKind.event => 'EVENEMENT',
+        ChatContextKind.artist => 'PROFIL',
+        ChatContextKind.general => 'GENERAL',
+      };
+      final created = await ConversationApi.create(
+        token,
+        participant.id,
+        contextType: contextType,
+        contextId: about.id,
+        contextTitle: about.title,
+        contextSubtitle: about.subtitle,
+      );
+      final id = '${created['id'] ?? ''}';
+      if (id.isEmpty) throw const ConversationApiException('Conversation invalide.');
+      await ConversationApi.send(token, id, text);
+      await loadRemote();
+      final remoteThread = byId(id);
+      if (remoteThread != null) return remoteThread;
+      final thread = ChatThread(
+        id: id,
+        participant: participant,
+        about: about,
+        status: ThreadStatus.open,
+        messages: [ChatMessage(id: 'pending', text: text, at: DateTime.now())],
+      );
+      _threads.add(thread);
+      notifyListeners();
+      return thread;
+    }
 
     // TODO : POST /conversations { participantId, contextId, text }
     await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -257,6 +389,18 @@ class MessageStore extends ChangeNotifier {
     final reason = MessageGuard.check(text);
     if (reason != null) throw StateError(reason);
 
+    if (_useRemote) {
+      final token = AtlartSession.instance.token!;
+      await ConversationApi.resendFirstMessage(token, threadId, text);
+      t.messages
+        ..removeWhere((m) => !m.system && m.fromMe)
+        ..add(ChatMessage(id: _nextId('msg'), text: text, at: DateTime.now()));
+      t.status = ThreadStatus.inReview;
+      t.rejectionReason = null;
+      notifyListeners();
+      return;
+    }
+
     // TODO : PUT /conversations/{id}/first-message
     await Future<void>.delayed(const Duration(milliseconds: 400));
 
@@ -276,7 +420,16 @@ class MessageStore extends ChangeNotifier {
       throw StateError('Conversation non ouverte');
     }
 
-    // TODO : POST /conversations/{id}/messages
+    if (_useRemote) {
+      final token = AtlartSession.instance.token!;
+      await ConversationApi.send(token, threadId, text);
+      if (t.status == ThreadStatus.delivered && t.incoming) {
+        t.status = ThreadStatus.open;
+        t.incoming = false;
+      }
+      await refreshThread(threadId);
+      return;
+    }
     t.messages.add(
       ChatMessage(id: _nextId('msg'), text: text, at: DateTime.now()),
     );
@@ -294,6 +447,12 @@ class MessageStore extends ChangeNotifier {
     if (t == null || t.unread == 0) return;
     t.unread = 0;
     notifyListeners();
+    if (_useRemote) {
+      final token = AtlartSession.instance.token!;
+      ConversationApi.markRead(token, threadId).catchError((Object error) {
+        debugPrint('Unable to mark conversation as read: $error');
+      });
+    }
   }
 
   // ── Côté serveur / admin (à brancher sur l'API) ──

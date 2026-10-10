@@ -1,9 +1,20 @@
 import 'package:flutter/material.dart';
 
+import '../app_session.dart';
+import '../services/auth_api.dart';
+import '../services/safety_api.dart';
 import '../theme/atlart_ui_theme.dart';
 import '../widgets/profile_shared_widgets.dart';
+
 class BlockedAccount {
-  BlockedAccount({required this.name, required this.blockedOn, required this.color});
+  BlockedAccount({
+    this.userId,
+    required this.name,
+    required this.blockedOn,
+    required this.color,
+  });
+
+  final String? userId;
   final String name;
   final String blockedOn; // ex. "Bloqué le 12 sept. 2026"
   final Color color;
@@ -21,20 +32,102 @@ class BlockedAccountsScreen extends StatefulWidget {
 }
 
 class _BlockedAccountsScreenState extends State<BlockedAccountsScreen> {
-  late final List<BlockedAccount> _accounts = widget.initialAccounts ??
-      [
-        BlockedAccount(name: 'Karim M.', blockedOn: 'Bloqué le 12 sept. 2026', color: const Color(0xFF8A6FC9)),
-        BlockedAccount(name: 'Zied T.', blockedOn: 'Bloqué le 28 août 2026', color: const Color(0xFF3A9BD8)),
-      ];
+  static const _colors = [
+    Color(0xFF8A6FC9),
+    Color(0xFF3A9BD8),
+    Color(0xFF258F81),
+  ];
+  late final List<BlockedAccount> _accounts;
+  bool _loading = true;
+  String? _loadError;
 
-  void _unblock(int index) {
+  @override
+  void initState() {
+    super.initState();
+    _accounts = widget.initialAccounts ?? [];
+    if (widget.initialAccounts != null) {
+      _loading = false;
+    } else {
+      _loadBlockedAccounts();
+    }
+  }
+
+  String _dateLabel(Object? rawDate) {
+    final date = DateTime.tryParse('$rawDate')?.toLocal();
+    if (date == null) return 'Bloqué récemment';
+    final day = date.day.toString().padLeft(2, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    return 'Bloqué le $day/$month/${date.year}';
+  }
+
+  Future<void> _loadBlockedAccounts() async {
+    final token = AtlartSession.instance.token;
+    if (!AuthApi.useBackend || token == null) {
+      setState(() {
+        _accounts.addAll([
+          BlockedAccount(
+            name: 'Karim M.',
+            blockedOn: 'Bloqué le 12/09/2026',
+            color: _colors[0],
+          ),
+          BlockedAccount(
+            name: 'Zied T.',
+            blockedOn: 'Bloqué le 28/08/2026',
+            color: _colors[1],
+          ),
+        ]);
+        _loading = false;
+      });
+      return;
+    }
+    try {
+      final rows = await SafetyApi.blockedUsers(token);
+      if (!mounted) return;
+      setState(() {
+        _accounts
+          ..clear()
+          ..addAll([
+            for (var i = 0; i < rows.length; i++)
+              BlockedAccount(
+                userId: '${rows[i]['utilisateur_id'] ?? ''}',
+                name: '${rows[i]['nom_emprunt'] ?? 'Utilisateur AtlArt'}',
+                blockedOn: _dateLabel(rows[i]['date_blocage']),
+                color: _colors[i % _colors.length],
+              ),
+          ]);
+        _loadError = null;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadError = '$error';
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _unblock(int index) async {
+    final account = _accounts[index];
+    final token = AtlartSession.instance.token;
+    if (AuthApi.useBackend && token != null && account.userId != null) {
+      try {
+        await SafetyApi.unblockUser(token: token, userId: account.userId!);
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Déblocage impossible : $error')),
+          );
+        }
+        return;
+      }
+    }
+    if (!mounted) return;
     final name = _accounts[index].name;
     setState(() => _accounts.removeAt(index));
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('$name débloqué(e).')),
     );
-    // TODO: appeler l'API de déblocage ; en cas d'échec, réinsérer le
-    // compte dans _accounts et informer l'utilisateur.
   }
 
   @override
@@ -73,7 +166,31 @@ class _BlockedAccountsScreenState extends State<BlockedAccountsScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            if (_accounts.isEmpty)
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.only(top: 40),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_loadError != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 32),
+                child: Column(
+                  children: [
+                    Text(_loadError!, textAlign: TextAlign.center),
+                    TextButton(
+                      onPressed: () {
+                        setState(() {
+                          _loading = true;
+                          _loadError = null;
+                        });
+                        _loadBlockedAccounts();
+                      },
+                      child: const Text('Réessayer'),
+                    ),
+                  ],
+                ),
+              )
+            else if (_accounts.isEmpty)
               const Padding(
                 padding: EdgeInsets.only(top: 40),
                 child: Center(
@@ -82,7 +199,10 @@ class _BlockedAccountsScreenState extends State<BlockedAccountsScreen> {
               )
             else ...[
               for (var i = 0; i < _accounts.length; i++)
-                _BlockedRow(account: _accounts[i], onUnblock: () => _unblock(i)),
+                _BlockedRow(
+                  account: _accounts[i],
+                  onUnblock: () => _unblock(i),
+                ),
               const SizedBox(height: 6),
               const Text(
                 'Débloquer ne rétablit pas les abonnements : il faudra se '

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../theme/atlart_ui_theme.dart';
@@ -487,7 +489,7 @@ class CoverUploadBox extends StatelessWidget {
                   const Text('JPEG, PNG', style: TextStyle(fontSize: 9, color: AtlartPalette.blueTextLight, fontFamily: 'Poppins')),
                 ],
               )
-            : ClipRRect(borderRadius: BorderRadius.circular(15), child: Image.asset(imagePath!, fit: BoxFit.cover, width: double.infinity, height: double.infinity)),
+            : ClipRRect(borderRadius: BorderRadius.circular(15), child: Image.file(File(imagePath!), fit: BoxFit.cover, width: double.infinity, height: double.infinity)),
       ),
     );
   }

@@ -4,6 +4,8 @@ import '../theme/atlart_ui_theme.dart';
 import '../widgets/atlart_search_widgets.dart';
 import '../widgets/profile_shared_widgets.dart'
     show InitialsAvatar, RoundIconButton;
+import '../services/auth_api.dart';
+import '../services/event_api.dart';
 import 'checkin_screen.dart';
 import 'event_draft.dart';
 
@@ -13,10 +15,12 @@ class ParticipantsScreen extends StatefulWidget {
   const ParticipantsScreen({
     super.key,
     required this.eventTitle,
+    this.eventId,
     this.initialParticipants,
   });
 
   final String eventTitle;
+  final String? eventId;
   final List<EventParticipant>? initialParticipants;
 
   @override
@@ -26,7 +30,7 @@ class ParticipantsScreen extends StatefulWidget {
 class _ParticipantsScreenState extends State<ParticipantsScreen> {
   late final List<EventParticipant> _all =
       widget.initialParticipants ??
-      [
+      (AuthApi.useBackend ? <EventParticipant>[] : [
         EventParticipant(
           name: 'Leïla Mansouri',
           requestedOn: 'Demandé le 15 sept.',
@@ -38,8 +42,68 @@ class _ParticipantsScreenState extends State<ParticipantsScreen> {
           avatarColor: const Color(0xFF2F9E6B),
           status: RegistrationStatus.validated,
         ),
-      ];
+      ]);
   _ParticipantsTab _tab = _ParticipantsTab.pending;
+  bool _loading = false;
+  bool _saving = false;
+  String? _loadError;
+
+  @override
+  void initState() {
+    super.initState();
+    if (AuthApi.useBackend && widget.eventId != null) _loadParticipants();
+  }
+
+  Future<void> _loadParticipants() async {
+    setState(() => _loading = true);
+    try {
+      final rows = await EventApi.participants(widget.eventId!);
+      if (!mounted) return;
+      const colors = [Color(0xFF8A6FC9), Color(0xFF2F9E6B), Color(0xFF4A78B8)];
+      final participants = rows.where((row) => row['statut'] != 'REJETE').map((row) {
+        final name = '${row['nom_complet'] ?? 'Participant'}';
+        final requested = DateTime.tryParse('${row['date_demande'] ?? ''}');
+        final checkin = DateTime.tryParse('${row['date_checkin'] ?? ''}');
+        return EventParticipant(
+          name: name,
+          requestedOn: requested == null
+              ? 'Demande reçue'
+              : 'Demandé le ${requested.day.toString().padLeft(2, '0')}/${requested.month.toString().padLeft(2, '0')}/${requested.year}',
+          avatarColor: colors[name.hashCode.abs() % colors.length],
+          registrationId: '${row['id'] ?? ''}',
+          email: '${row['email'] ?? ''}',
+          phone: '${row['telephone'] ?? ''}',
+          message: '${row['message'] ?? ''}',
+          placesRequested: int.tryParse('${row['nombre_participants'] ?? 1}') ?? 1,
+          status: switch ('${row['statut'] ?? ''}') {
+            'VALIDE' when row['checkin_effectue'] == true || row['checkin_effectue'] == 1 || row['checkin_effectue'] == '1' => RegistrationStatus.present,
+            'VALIDE' => RegistrationStatus.validated,
+            _ => RegistrationStatus.pending,
+          },
+          checkedInAt: checkin == null
+              ? null
+              : '${checkin.hour.toString().padLeft(2, '0')}:${checkin.minute.toString().padLeft(2, '0')}',
+          checkedInManually: '${row['checkin_methode'] ?? ''}' == 'MANUEL',
+        );
+      }).toList();
+      setState(() {
+        _all
+          ..clear()
+          ..addAll(participants);
+        _loading = false;
+        _loadError = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _loadError = error.toString();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Impossible de charger les demandes : $error')),
+      );
+    }
+  }
 
   List<EventParticipant> get _pending =>
       _all.where((p) => p.status == RegistrationStatus.pending).toList();
@@ -58,14 +122,44 @@ class _ParticipantsScreenState extends State<ParticipantsScreen> {
   Future<void> _openCheckIn() async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            CheckInScreen(eventTitle: widget.eventTitle, participants: _all),
+        builder: (_) => CheckInScreen(
+          eventTitle: widget.eventTitle,
+          eventId: widget.eventId,
+          participants: _all,
+        ),
       ),
     );
     if (mounted) setState(() {});
   }
 
-  void _decide(EventParticipant participant, {required bool accept}) {
+  Future<void> _decide(EventParticipant participant, {required bool accept}) async {
+    if (_saving) return;
+    if (AuthApi.useBackend && participant.registrationId != null) {
+      setState(() => _saving = true);
+      try {
+        await EventApi.decideRegistration(
+          registrationId: participant.registrationId!,
+          accept: accept,
+        );
+      } catch (error) {
+        if (!mounted) return;
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Impossible de traiter la demande : $error')),
+        );
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        if (accept) {
+          participant.status = RegistrationStatus.validated;
+        } else {
+          _all.remove(participant);
+        }
+        _saving = false;
+      });
+      return;
+    }
     final oldStatus = participant.status;
     setState(() {
       if (accept) {
@@ -216,7 +310,28 @@ class _ParticipantsScreenState extends State<ParticipantsScreen> {
             ),
             const Divider(height: 20, color: Color(0xFFE1E9F2)),
             Expanded(
-              child: participants.isEmpty
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _loadError != null
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            child: Text(
+                              'Chargement impossible : $_loadError',
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: _loadParticipants,
+                            child: const Text('Réessayer'),
+                          ),
+                        ],
+                      ),
+                    )
+                  : participants.isEmpty
                   ? Center(
                       child: Padding(
                         padding: const EdgeInsets.all(24),
@@ -372,6 +487,35 @@ class _ParticipantRow extends StatelessWidget {
                   fontFamily: 'Poppins',
                 ),
               ),
+              if (participant.email.isNotEmpty ||
+                  participant.phone.isNotEmpty ||
+                  participant.placesRequested > 1)
+                Text(
+                  [
+                    if (participant.email.isNotEmpty) participant.email,
+                    if (participant.phone.isNotEmpty) participant.phone,
+                    if (participant.placesRequested > 1)
+                      '${participant.placesRequested} places demandées',
+                  ].join(' · '),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 9,
+                    color: AtlartPalette.blueTextLight,
+                    fontFamily: 'Poppins',
+                  ),
+                ),
+              if (participant.message.isNotEmpty)
+                Text(
+                  participant.message,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 9,
+                    color: AtlartPalette.navy,
+                    fontFamily: 'Poppins',
+                  ),
+                ),
             ],
           ),
         ),

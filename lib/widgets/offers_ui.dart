@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-import '../Screens/favoris_screen.dart' show FavoritesScreen;
+import '../screens/favoris_screen.dart' show FavoritesScreen;
 import '../models/offer_status.dart';
 import '../theme/atlart_ui_theme.dart' show AtlartAssets;
 import 'atlart_search_widgets.dart' show AtlartBottomNav;

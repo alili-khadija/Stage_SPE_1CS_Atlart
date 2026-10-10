@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../theme/atlart_ui_theme.dart';
+import '../services/auth_api.dart';
+import '../services/event_api.dart';
 import '../widgets/profile_shared_widgets.dart'
     show InitialsAvatar, RoundIconButton;
 import 'event_draft.dart';
@@ -10,10 +12,12 @@ class CheckInScreen extends StatefulWidget {
   const CheckInScreen({
     super.key,
     required this.eventTitle,
+    this.eventId,
     required this.participants,
   });
 
   final String eventTitle;
+  final String? eventId;
   final List<EventParticipant> participants;
 
   @override
@@ -37,6 +41,11 @@ class _CheckInScreenState extends State<CheckInScreen> {
       _validated.where((p) => p.status != RegistrationStatus.present).toList();
 
   List<EventParticipant> get _recent => _present.reversed.take(8).toList();
+  int get _totalAttendees =>
+      _validated.fold(0, (total, participant) => total + participant.placesRequested);
+  int get _presentAttendees =>
+      _present.fold(0, (total, participant) => total + participant.placesRequested);
+  bool _checkingIn = false;
 
   String get _nowLabel {
     final now = TimeOfDay.now();
@@ -44,8 +53,35 @@ class _CheckInScreenState extends State<CheckInScreen> {
         '${now.minute.toString().padLeft(2, '0')}';
   }
 
-  void _checkIn(EventParticipant participant, {required bool manual}) {
-    if (participant.status == RegistrationStatus.present) return;
+  Future<void> _checkIn(EventParticipant participant, {required bool manual}) async {
+    if (_checkingIn || participant.status == RegistrationStatus.present) return;
+    if (AuthApi.useBackend && eventId != null && participant.registrationId != null) {
+      if (!manual) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Le scan QR est encore en mode aperçu. Utilisez le pointage manuel pour enregistrer la présence.'),
+          ),
+        );
+        return;
+      }
+      setState(() => _checkingIn = true);
+      try {
+        await EventApi.checkIn(
+          eventId: eventId!,
+          registrationId: participant.registrationId!,
+          manual: manual,
+        );
+      } catch (error) {
+        if (!mounted) return;
+        setState(() => _checkingIn = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Pointage impossible : $error')),
+        );
+        return;
+      }
+      if (!mounted) return;
+      setState(() => _checkingIn = false);
+    }
     setState(() {
       participant.status = RegistrationStatus.present;
       participant.checkedInAt = _nowLabel;
@@ -61,11 +97,14 @@ class _CheckInScreenState extends State<CheckInScreen> {
   Future<void> _openScanner() async {
     final result = await Navigator.of(context).push<EventParticipant>(
       MaterialPageRoute<EventParticipant>(
-        builder: (_) => QrScannerScreen(waitingParticipants: _waiting),
+        builder: (_) => QrScannerScreen(
+          waitingParticipants: _waiting,
+          previewMode: !AuthApi.useBackend,
+        ),
       ),
     );
     if (result != null && mounted) {
-      _checkIn(result, manual: false);
+      await _checkIn(result, manual: false);
     }
   }
 
@@ -77,14 +116,14 @@ class _CheckInScreenState extends State<CheckInScreen> {
       builder: (_) => _ManualCheckInSheet(candidates: _waiting),
     );
     if (selected != null && mounted) {
-      _checkIn(selected, manual: true);
+      await _checkIn(selected, manual: true);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final total = _validated.length;
-    final presentCount = _present.length;
+    final total = _totalAttendees;
+    final presentCount = _presentAttendees;
     final ratio = total == 0 ? 0.0 : presentCount / total;
     final latest = _recent.isEmpty ? null : _recent.first;
 
@@ -274,7 +313,7 @@ class _CheckInScreenState extends State<CheckInScreen> {
                 width: double.infinity,
                 height: 46,
                 child: OutlinedButton(
-                  onPressed: _openManualSheet,
+                  onPressed: _checkingIn ? null : _openManualSheet,
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: AtlartPalette.navyDark),
                     shape: RoundedRectangleBorder(

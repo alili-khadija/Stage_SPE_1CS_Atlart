@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../app_session.dart';
+import '../services/auth_api.dart';
+import '../services/follow_api.dart';
 import '../theme/atlart_ui_theme.dart';
 import '../widgets/profile_kit.dart';
 import '../widgets/profile_shared_widgets.dart';
@@ -9,6 +11,7 @@ import 'career_screen.dart';
 import 'create_publication_flow.dart';
 import 'edit_profile_screen.dart';
 import 'published_works_screen.dart';
+import '../widgets/favorite_action_button.dart';
 
 /// Page "Profile" pour un artiste ou artisan.
 /// [isMe] indique si le profil appartient à la personne connectée.
@@ -26,6 +29,7 @@ class ArtistProfileScreen extends StatelessWidget {
     this.isMe = true,
     this.isVerified = true,
     this.isFollowing = false,
+    this.favoriteId,
   });
 
   final String name;
@@ -39,6 +43,7 @@ class ArtistProfileScreen extends StatelessWidget {
   final bool isMe;
   final bool isVerified;
   final bool isFollowing;
+  final String? favoriteId;
 
   void _openMenu(BuildContext context) {
     showModalBottomSheet<void>(
@@ -104,6 +109,12 @@ class ArtistProfileScreen extends StatelessWidget {
       subtitle: '$role · $city',
       verified: isVerified,
       onMenuTap: isMe ? () => _openMenu(context) : null,
+      trailing: isMe
+          ? null
+          : FavoriteActionButton(
+              entityType: 'UTILISATEUR',
+              entityId: favoriteId,
+            ),
       stats: stats,
       children: [
         ProfileBio(bio),
@@ -121,12 +132,10 @@ class ArtistProfileScreen extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 10),
-        ProfileActionButton(
-          label: isMe
-              ? 'Modifier le profil'
-              : (isFollowing ? 'Suivi(e)' : 'Suivre'),
-          onPressed: isMe
-              ? () => Navigator.of(context).push(
+        if (isMe)
+          ProfileActionButton(
+            label: 'Modifier le profil',
+            onPressed: () => Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => EditProfileScreen(
                       initialName: name,
@@ -134,9 +143,13 @@ class ArtistProfileScreen extends StatelessWidget {
                       initialLocation: city,
                     ),
                   ),
-                )
-              : null,
-        ),
+                ),
+          )
+        else
+          _FollowProfileActionButton(
+            userId: favoriteId,
+            initialFollowing: isFollowing,
+          ),
         const SizedBox(height: 26),
         ProfileSectionHeader(
           'ŒUVRES PUBLIÉES',
@@ -164,6 +177,64 @@ class ArtistProfileScreen extends StatelessWidget {
       ],
     );
   }
+}
+
+class _FollowProfileActionButton extends StatefulWidget {
+  const _FollowProfileActionButton({
+    required this.userId,
+    required this.initialFollowing,
+  });
+
+  final String? userId;
+  final bool initialFollowing;
+
+  @override
+  State<_FollowProfileActionButton> createState() =>
+      _FollowProfileActionButtonState();
+}
+
+class _FollowProfileActionButtonState extends State<_FollowProfileActionButton> {
+  late bool _following = widget.initialFollowing;
+  bool _busy = false;
+
+  Future<void> _toggle() async {
+    final userId = widget.userId;
+    if (userId == null) {
+      _showMessage('Ce profil de démonstration n’est pas relié au catalogue.');
+      return;
+    }
+    final token = AtlartSession.instance.token;
+    if (!AuthApi.useBackend || token == null) {
+      _showMessage('Connectez-vous pour suivre ce profil.');
+      return;
+    }
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final following = await FollowApi.setFollowing(
+        token: token,
+        userId: userId,
+        follow: !_following,
+      );
+      if (mounted) setState(() => _following = following);
+    } on FollowApiException catch (error) {
+      _showMessage(error.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) => ProfileActionButton(
+        label: _busy ? 'Patientez…' : (_following ? 'Suivi(e)' : 'Suivre'),
+        icon: _following ? Icons.check_rounded : Icons.person_add_alt_1_rounded,
+        filled: !_following,
+        onPressed: _busy ? null : _toggle,
+      );
 }
 
 class _WorksGrid extends StatefulWidget {
