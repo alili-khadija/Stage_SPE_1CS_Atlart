@@ -55,6 +55,9 @@ class _CheckInScreenState extends State<CheckInScreen> {
 
   Future<void> _checkIn(EventParticipant participant, {required bool manual}) async {
     if (_checkingIn || participant.status == RegistrationStatus.present) return;
+
+    final eventId = widget.eventId;
+
     if (AuthApi.useBackend && eventId != null && participant.registrationId != null) {
       if (!manual) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -67,7 +70,7 @@ class _CheckInScreenState extends State<CheckInScreen> {
       setState(() => _checkingIn = true);
       try {
         await EventApi.checkIn(
-          eventId: eventId!,
+          eventId: eventId,
           registrationId: participant.registrationId!,
           manual: manual,
         );
@@ -82,6 +85,7 @@ class _CheckInScreenState extends State<CheckInScreen> {
       if (!mounted) return;
       setState(() => _checkingIn = false);
     }
+
     setState(() {
       participant.status = RegistrationStatus.present;
       participant.checkedInAt = _nowLabel;
